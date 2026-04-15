@@ -96,10 +96,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Default to 0.0.0.0 so Wi-Fi connections work without setting the env var.
     // USB-only mode: set TABLET_MONITOR_LISTEN=127.0.0.1 before starting.
-    let listen_host = std::env::var("TABLET_MONITOR_LISTEN").unwrap_or_else(|_| "0.0.0.0".to_string());
-    let listen_ip: std::net::Ipv4Addr = listen_host
-        .parse()
-        .unwrap_or(std::net::Ipv4Addr::LOCALHOST);
+    let listen_host =
+        std::env::var("TABLET_MONITOR_LISTEN").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let listen_ip: std::net::Ipv4Addr =
+        listen_host.parse().unwrap_or(std::net::Ipv4Addr::LOCALHOST);
 
     info!(%listen_ip, "signaling server listening on {}:9001", listen_ip);
     warp::serve(health.or(ws_route).or(stream_route).or(h264_route))
@@ -141,7 +141,9 @@ async fn handle_socket(socket: WebSocket, rooms: Rooms) {
                             serde_json::to_string(&SignalMessage::Error {
                                 message: format!("invalid json: {e}"),
                             })
-                            .unwrap_or_else(|_| "{\"type\":\"error\",\"message\":\"parse\"}".into()),
+                            .unwrap_or_else(|_| {
+                                "{\"type\":\"error\",\"message\":\"parse\"}".into()
+                            }),
                         ));
                         continue;
                     }
@@ -180,39 +182,21 @@ async fn handle_socket(socket: WebSocket, rooms: Rooms) {
                             room: room.clone(),
                             sdp,
                         };
-                        relay(
-                            &rooms,
-                            &room,
-                            &peer_id,
-                            &outbound,
-                        )
-                        .await;
+                        relay(&rooms, &room, &peer_id, &outbound).await;
                     }
                     SignalMessage::Answer { room, sdp } => {
                         let outbound = SignalMessage::Answer {
                             room: room.clone(),
                             sdp,
                         };
-                        relay(
-                            &rooms,
-                            &room,
-                            &peer_id,
-                            &outbound,
-                        )
-                        .await;
+                        relay(&rooms, &room, &peer_id, &outbound).await;
                     }
                     SignalMessage::IceCandidate { room, candidate } => {
                         let outbound = SignalMessage::IceCandidate {
                             room: room.clone(),
                             candidate,
                         };
-                        relay(
-                            &rooms,
-                            &room,
-                            &peer_id,
-                            &outbound,
-                        )
-                        .await;
+                        relay(&rooms, &room, &peer_id, &outbound).await;
                     }
                     _ => {}
                 }
@@ -273,71 +257,77 @@ fn env_or<T: std::str::FromStr>(name: &str, default: T) -> T {
 }
 
 async fn handle_stream(socket: warp::ws::WebSocket, cfg: StreamConfig, query: StreamQuery) {
-        use std::sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
-        };
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
-        let (mut ws_tx, mut ws_rx) = socket.split();
-        let running = Arc::new(AtomicBool::new(true));
-        let running2 = running.clone();
+    let (mut ws_tx, mut ws_rx) = socket.split();
+    let running = Arc::new(AtomicBool::new(true));
+    let running2 = running.clone();
 
-        // Detectar cierre de la conexión
-        tokio::spawn(async move {
-            while let Some(Ok(msg)) = ws_rx.next().await {
-                if msg.is_close() {
-                    break;
-                }
-            }
-            running2.store(false, Ordering::Relaxed);
-        });
-
-        let (screen_w, screen_h) = capture::screen_size();
-        let out_w = query.w.unwrap_or((screen_w / cfg.scale).max(1)).clamp(320, screen_w);
-        let out_h = query.h.unwrap_or((screen_h / cfg.scale).max(1)).clamp(240, screen_h);
-        let fps = query.fps.unwrap_or(cfg.fps).clamp(5, 60);
-        let quality = query.q.unwrap_or(cfg.jpeg_quality).clamp(15, 90);
-        let fit_mode = match query.fit.as_deref() {
-            Some("contain") => capture::FitMode::Contain,
-            _ => capture::FitMode::Cover,
-        };
-
-        info!(out_w, out_h, fps, quality, fit = ?query.fit, "stream client connected");
-
-        let frame_ms = (1000 / fps.max(1)) as u64;
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(frame_ms));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-        loop {
-            interval.tick().await;
-
-            if !running.load(Ordering::Relaxed) {
+    // Detectar cierre de la conexión
+    tokio::spawn(async move {
+        while let Some(Ok(msg)) = ws_rx.next().await {
+            if msg.is_close() {
                 break;
             }
+        }
+        running2.store(false, Ordering::Relaxed);
+    });
 
-            let frame = tokio::task::spawn_blocking(move || {
-                capture::capture_jpeg_to_size(quality, out_w, out_h, fit_mode)
-            })
-            .await;
+    let (screen_w, screen_h) = capture::screen_size();
+    let out_w = query
+        .w
+        .unwrap_or((screen_w / cfg.scale).max(1))
+        .clamp(320, screen_w);
+    let out_h = query
+        .h
+        .unwrap_or((screen_h / cfg.scale).max(1))
+        .clamp(240, screen_h);
+    let fps = query.fps.unwrap_or(cfg.fps).clamp(5, 60);
+    let quality = query.q.unwrap_or(cfg.jpeg_quality).clamp(15, 90);
+    let fit_mode = match query.fit.as_deref() {
+        Some("contain") => capture::FitMode::Contain,
+        _ => capture::FitMode::Cover,
+    };
 
-            match frame {
-                Ok(Ok(jpeg)) => {
-                    if ws_tx.send(Message::binary(jpeg)).await.is_err() {
-                        break;
-                    }
-                }
-                Ok(Err(e)) => {
-                    error!("capture error: {e}");
-                }
-                Err(e) => {
-                    error!("spawn_blocking error: {e}");
+    info!(out_w, out_h, fps, quality, fit = ?query.fit, "stream client connected");
+
+    let frame_ms = (1000 / fps.max(1)) as u64;
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(frame_ms));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        interval.tick().await;
+
+        if !running.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let frame = tokio::task::spawn_blocking(move || {
+            capture::capture_jpeg_to_size(quality, out_w, out_h, fit_mode)
+        })
+        .await;
+
+        match frame {
+            Ok(Ok(jpeg)) => {
+                if ws_tx.send(Message::binary(jpeg)).await.is_err() {
                     break;
                 }
             }
+            Ok(Err(e)) => {
+                error!("capture error: {e}");
+            }
+            Err(e) => {
+                error!("spawn_blocking error: {e}");
+                break;
+            }
         }
-
-        info!("stream client disconnected");
     }
+
+    info!("stream client disconnected");
+}
 
 /// Capture backend passed to `stream_with_ffmpeg`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -355,34 +345,42 @@ fn encoder_extra_args(encoder: &str) -> Vec<String> {
     match encoder {
         "h264_nvenc" => vec![
             // p1 = fastest NVENC preset (replaces deprecated "ll" in FFmpeg 6+)
-            "-preset".into(), "p1".into(),
-            "-tune".into(), "ll".into(),
+            "-preset".into(),
+            "p1".into(),
+            "-tune".into(),
+            "ll".into(),
             // cbr: constant bitrate — lowest encode latency; encoder outputs frames immediately
             // without lookahead buffering (VBR mode adds 50-100 ms of lookahead delay).
-            "-rc".into(), "cbr".into(),
+            "-rc".into(),
+            "cbr".into(),
             // no B-frames: eliminates 2-frame encode delay
-            "-bf".into(), "0".into(),
+            "-bf".into(),
+            "0".into(),
             // zerolatency: disables NVENC picture-reorder buffer (hardware lookahead)
-            "-zerolatency".into(), "1".into(),
+            "-zerolatency".into(),
+            "1".into(),
             // Level 5.1: 1890×1080@60fps = ~485k macroblocks/sec which exceeds Level 4.1
             // (245k limit). Without this, NVENC may write Level 4.1 in the SPS and Qualcomm
             // decoders enforce that limit, throttling output to ~50fps for complex content.
-            "-level".into(), "5.1".into(),
+            "-level".into(),
+            "5.1".into(),
         ],
         "h264_qsv" => vec![
-            "-preset".into(), "veryfast".into(),
+            "-preset".into(),
+            "veryfast".into(),
             // async_depth 1: reduce QSV internal pipeline length (fewer frames queued)
-            "-async_depth".into(), "1".into(),
-            "-bf".into(), "0".into(),
+            "-async_depth".into(),
+            "1".into(),
+            "-bf".into(),
+            "0".into(),
         ],
-        "h264_amf" => vec![
-            "-quality".into(), "speed".into(),
-            "-bf".into(), "0".into(),
-        ],
+        "h264_amf" => vec!["-quality".into(), "speed".into(), "-bf".into(), "0".into()],
         "libx264" => vec![
-            "-preset".into(), "ultrafast".into(),
+            "-preset".into(),
+            "ultrafast".into(),
             // zerolatency: disables lookahead + sets bf=0 + rc_lookahead=0
-            "-tune".into(), "zerolatency".into(),
+            "-tune".into(),
+            "zerolatency".into(),
         ],
         _ => vec!["-bf".into(), "0".into()],
     }
@@ -515,17 +513,25 @@ async fn stream_with_ffmpeg(
                 "-f".into(),
                 "lavfi".into(),
                 "-i".into(),
-                format!("ddagrab={}:framerate={fps},hwdownload,format=bgra", display_idx),
+                format!(
+                    "ddagrab={}:framerate={fps},hwdownload,format=bgra",
+                    display_idx
+                ),
             ]);
         }
         Capture::Gdigrab => {
             // Disable input probing: gdigrab doesn't need it and skipping saves ~500 ms.
             args.extend([
-                "-probesize".into(), "32".into(),
-                "-analyzeduration".into(), "0".into(),
-                "-f".into(), "gdigrab".into(),
-                "-framerate".into(), fps.to_string(),
-                "-i".into(), "desktop".into(),
+                "-probesize".into(),
+                "32".into(),
+                "-analyzeduration".into(),
+                "0".into(),
+                "-f".into(),
+                "gdigrab".into(),
+                "-framerate".into(),
+                fps.to_string(),
+                "-i".into(),
+                "desktop".into(),
             ]);
         }
     }
@@ -538,9 +544,12 @@ async fn stream_with_ffmpeg(
     //   Frame duplication is imperceptible at 60fps and guarantees the decoder always
     //   has exactly 60 frames per second to consume.
     args.extend([
-        "-fflags".into(), "+nobuffer".into(),
-        "-flags".into(), "+low_delay".into(),
-        "-fps_mode".into(), "cfr".into(),
+        "-fflags".into(),
+        "+nobuffer".into(),
+        "-flags".into(),
+        "+low_delay".into(),
+        "-fps_mode".into(),
+        "cfr".into(),
     ]);
 
     // --- Video filter ---
@@ -567,16 +576,22 @@ async fn stream_with_ffmpeg(
     let bufsize = bitrate_kbps / 4;
     let gop = fps / 2;
     args.extend([
-        "-g".into(), gop.to_string(),
-        "-b:v".into(), format!("{}k", bitrate_kbps),
-        "-maxrate".into(), format!("{}k", bitrate_kbps),
-        "-bufsize".into(), format!("{}k", bufsize),
+        "-g".into(),
+        gop.to_string(),
+        "-b:v".into(),
+        format!("{}k", bitrate_kbps),
+        "-maxrate".into(),
+        format!("{}k", bitrate_kbps),
+        "-bufsize".into(),
+        format!("{}k", bufsize),
         // dump_extra: Repeat the SPS+PPS parameter sets before every IDR frame.
         // Without this, parameter sets only appear once at stream start. If the decoder
         // initialises a fraction of a second late (surface not ready, OkHttp delay, etc.)
         // it misses them and produces a black screen until the next reconnect.
-        "-bsf:v".into(), "dump_extra".into(),
-        "-f".into(), "h264".into(),
+        "-bsf:v".into(),
+        "dump_extra".into(),
+        "-f".into(),
+        "h264".into(),
         "-".into(),
     ]);
 
@@ -616,7 +631,11 @@ async fn stream_with_ffmpeg(
             info!(encoder, "first H.264 bytes sent to client ({n} bytes)");
         }
         sent_any = true;
-        if ws_tx.send(Message::binary(buf[..n].to_vec())).await.is_err() {
+        if ws_tx
+            .send(Message::binary(buf[..n].to_vec()))
+            .await
+            .is_err()
+        {
             break;
         }
     }
@@ -652,7 +671,11 @@ async fn broadcast(rooms: &Rooms, room: &str, sender: &str, message: &SignalMess
 /// 3. Fall back to the name `ffmpeg` and let the OS search PATH.
 fn ffmpeg_exe() -> std::path::PathBuf {
     if let Ok(exe) = std::env::current_exe() {
-        let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+        let name = if cfg!(windows) {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        };
         let sibling = exe.with_file_name(name);
         if sibling.exists() {
             return sibling;
@@ -664,7 +687,11 @@ fn ffmpeg_exe() -> std::path::PathBuf {
             }
         }
     }
-    std::path::PathBuf::from(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" })
+    std::path::PathBuf::from(if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    })
 }
 
 /// Same bundled-first resolution for `adb(.exe)`.

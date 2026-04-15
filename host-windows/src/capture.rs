@@ -1,8 +1,8 @@
 use std::mem;
 
 use winapi::um::wingdi::{
-    BLACKNESS, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits,
-    PatBlt, SelectObject, SetStretchBltMode, StretchBlt, BI_RGB, BITMAPINFO, BITMAPINFOHEADER,
+    CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, PatBlt,
+    SelectObject, SetStretchBltMode, StretchBlt, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLACKNESS,
     DIB_RGB_COLORS, HALFTONE, SRCCOPY,
 };
 use winapi::um::winuser::{
@@ -72,17 +72,7 @@ unsafe fn capture_gdi_to_size(
 
     SetStretchBltMode(dst_dc, HALFTONE);
     StretchBlt(
-        dst_dc,
-        off_x,
-        off_y,
-        draw_w,
-        draw_h,
-        screen_dc,
-        0,
-        0,
-        w as i32,
-        h as i32,
-        SRCCOPY,
+        dst_dc, off_x, off_y, draw_w, draw_h, screen_dc, 0, 0, w as i32, h as i32, SRCCOPY,
     );
 
     let mut bmi: BITMAPINFO = mem::zeroed();
@@ -127,13 +117,17 @@ fn encode_jpeg(
             let idx = (src_y * w as usize + src_x) * 4;
             rgb.push(pixels[idx + 2]); // R  (BGRA→RGB: swap B y R)
             rgb.push(pixels[idx + 1]); // G
-            rgb.push(pixels[idx]);     // B
+            rgb.push(pixels[idx]); // B
         }
     }
 
     let mut jpeg = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, quality)
-        .encode(&rgb, w, h, image::ExtendedColorType::Rgb8)?;
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, quality).encode(
+        &rgb,
+        w,
+        h,
+        image::ExtendedColorType::Rgb8,
+    )?;
 
     Ok(jpeg)
 }
