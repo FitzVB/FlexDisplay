@@ -4,5 +4,10 @@
         <item name="colorPrimary">#1976D2</item>
         <item name="colorPrimaryDark">#0D47A1</item>
         <item name="colorAccent">#42A5F5</item>
+        <!-- Transparent window background: lets SurfaceView render in its own hardware
+             overlay layer (below the window) without being covered by the theme color.
+             This allows normal View overlays (HUD TextView) to work above the video
+             without needing setZOrderOnTop, which would hide those overlays. -->
+        <item name="android:windowBackground">@android:color/transparent</item>
     </style>
 </resources>
