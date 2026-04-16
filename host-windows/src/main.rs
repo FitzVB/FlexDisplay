@@ -547,6 +547,28 @@ async fn main() -> anyhow::Result<()> {
         listen_host.parse().unwrap_or(std::net::Ipv4Addr::LOCALHOST);
 
     info!(%listen_ip, "host server listening on {}:9001", listen_ip);
+
+    // Auto-configure USB tunnel so the Android app works plug-and-play over USB
+    // without the user needing to run adb reverse manually.
+    {
+        let adb = adb_exe();
+        match std::process::Command::new(&adb)
+            .args(["reverse", "tcp:9001", "tcp:9001"])
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                info!("adb reverse tcp:9001 tcp:9001 OK — USB mode active");
+            }
+            Ok(out) => {
+                let msg = String::from_utf8_lossy(&out.stderr);
+                info!("adb reverse skipped (no Android device connected): {}", msg.trim());
+            }
+            Err(e) => {
+                info!("adb not found, USB mode unavailable: {e}");
+            }
+        }
+    }
+
     let gui_closed_rx = maybe_open_gui(listen_ip);
     let exit_on_gui_close =
         std::env::var("TABLET_MONITOR_EXIT_ON_GUI_CLOSE").ok().as_deref() == Some("1");
@@ -771,16 +793,22 @@ async fn handle_h264_stream(
         if let Some(pref) = preferred.as_deref() {
             if hw.contains(&pref) {
                 if pref == "h264_amf" {
+                    // Try every device variant with Ddagrab first (lower latency),
+                    // then every device variant with Gdigrab (more compatible).
                     for pre in &amf_pre_args_candidates {
                         candidates.push((pref.into(), Capture::Ddagrab, pre.clone()));
                     }
+                    for pre in &amf_pre_args_candidates {
+                        candidates.push((pref.into(), Capture::Gdigrab, pre.clone()));
+                    }
                 } else {
                     candidates.push((pref.into(), Capture::Ddagrab, vec![]));
+                    candidates.push((pref.into(), Capture::Gdigrab, vec![]));
                 }
             } else if pref == "libx264" {
                 candidates.push((pref.into(), Capture::Ddagrab, vec![]));
+                candidates.push((pref.into(), Capture::Gdigrab, vec![]));
             }
-            candidates.push((pref.into(), Capture::Gdigrab, vec![]));
         }
 
         if manual_encoder_selected {
@@ -867,7 +895,13 @@ async fn handle_h264_stream(
                             break;
                         }
                         StreamExit::Unavailable => {
-                            info!(encoder = %encoder, capture = ?capture, amf_device = ?amf_device, "not available, trying next");
+                            // If this was the user-preferred encoder, escalate to WARN so it's
+                            // visible in the console and the user knows why we fell back.
+                            if preferred.as_deref() == Some(encoder.as_str()) {
+                                tracing::warn!(encoder = %encoder, capture = ?capture, amf_device = ?amf_device, "preferred encoder unavailable, trying next candidate");
+                            } else {
+                                info!(encoder = %encoder, capture = ?capture, amf_device = ?amf_device, "not available, trying next");
+                            }
                         }
                         StreamExit::SocketClosed => {
                             break;
