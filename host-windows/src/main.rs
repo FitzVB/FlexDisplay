@@ -1132,6 +1132,7 @@ async fn stream_with_ffmpeg(
 
     let mut cmd = Command::new(ffmpeg_exe());
     cmd.args(&args)
+        .kill_on_drop(true)
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped());

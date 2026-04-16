@@ -21,6 +21,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -196,6 +197,8 @@ class MainActivity : AppCompatActivity() {
             sendPointerEvent(event)
             true
         }
+
+        setupBackHandler()
 
         connectButton.setOnClickListener {
             try {
@@ -450,13 +453,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    @Deprecated("Deprecated in API 33")
-    override fun onBackPressed() {
-        if (connected) {
-            stopAll()
-        } else {
-            super.onBackPressed()
-        }
+    private fun setupBackHandler() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (connected) stopAll() else finishAffinity()
+            }
+        })
     }
 
     override fun onDestroy() {
@@ -674,17 +676,6 @@ class MainActivity : AppCompatActivity() {
         socket?.close(1012, reason)
 
         reconnectHandler.postDelayed(streamReconnectRunnable, 150L)
-    }
-
-    private fun recreateDecoderForStreamChange(reason: String) {
-        val surface = decoderSurface ?: return
-        appendLog("Reiniciando decoder: $reason")
-        hasReceivedVideoChunk = false
-        lastVideoChunkAtMs = SystemClock.elapsedRealtime()
-        synchronized(decoderLock) {
-            decoder?.release()
-            decoder = createDecoder(surface)
-        }
     }
 
 }
