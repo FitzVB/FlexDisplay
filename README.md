@@ -104,6 +104,19 @@ Notes:
    - Start host server
 4. If needed, tap `Connect` in the Android app.
 
+### Antivirus fallback (no PowerShell)
+
+If your antivirus blocks `.ps1` scripts, use the safe batch-only path:
+
+1. Run `START_SAFE.bat`.
+2. For USB setup help (no PowerShell), run `USB_SAFE.bat`.
+3. For Wi-Fi IP guidance (no PowerShell), run `WIFI_SAFE.bat`.
+
+Notes:
+
+- `START_SAFE.bat` starts the host without invoking PowerShell.
+- In USB mode you may still need to run ADB commands manually.
+
 ### Recommended USB mode
 
 - Enable USB debugging on Android.

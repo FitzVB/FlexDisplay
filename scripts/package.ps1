@@ -236,6 +236,12 @@ function Copy-RequiredFiles {
     }
 
     Copy-Item (Join-Path $RepoRoot "START.bat") (Join-Path $DistRoot "START.bat") -Force
+    foreach ($safeBat in @("START_SAFE.bat", "USB_SAFE.bat", "WIFI_SAFE.bat")) {
+        $safeSrc = Join-Path $RepoRoot $safeBat
+        if (Test-Path $safeSrc) {
+            Copy-Item $safeSrc (Join-Path $DistRoot $safeBat) -Force
+        }
+    }
 
     $scriptFiles = @(
         "launcher.ps1",

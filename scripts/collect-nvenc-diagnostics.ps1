@@ -34,14 +34,14 @@ function Run-Cmd {
     param(
         [string]$Title,
         [string]$FilePath,
-        [string[]]$Args
+        [string[]]$CmdArgs
     )
 
     Write-Section $Title
-    Write-Log "COMMAND: $FilePath $($Args -join ' ')"
+    Write-Log "COMMAND: $FilePath $($CmdArgs -join ' ')"
 
     try {
-        $output = & $FilePath @Args 2>&1
+        $output = & $FilePath @CmdArgs 2>&1
         if ($output) {
             $output | ForEach-Object { Write-Log "$_" }
         }
@@ -98,8 +98,8 @@ try {
 
 $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($nvidiaSmi) {
-    Run-Cmd -Title "nvidia-smi" -FilePath $nvidiaSmi.Source -Args @()
-    Run-Cmd -Title "nvidia-smi query" -FilePath $nvidiaSmi.Source -Args @("--query-gpu=name,driver_version,vbios_version,pstate", "--format=csv,noheader")
+    Run-Cmd -Title "nvidia-smi" -FilePath $nvidiaSmi.Source -CmdArgs @()
+    Run-Cmd -Title "nvidia-smi query" -FilePath $nvidiaSmi.Source -CmdArgs @("--query-gpu=name,driver_version,vbios_version,pstate", "--format=csv,noheader")
 } else {
     Write-Section "nvidia-smi"
     Write-Log "nvidia-smi not found in PATH"
@@ -114,11 +114,11 @@ if ($ffmpeg) {
 }
 
 if ($ffmpeg) {
-    Run-Cmd -Title "ffmpeg -version" -FilePath $ffmpeg -Args @("-hide_banner", "-version")
-    Run-Cmd -Title "ffmpeg -encoders (nvenc/qsv/amf/x264)" -FilePath $ffmpeg -Args @("-hide_banner", "-encoders")
-    Run-Cmd -Title "ffmpeg -h encoder=h264_nvenc" -FilePath $ffmpeg -Args @("-hide_banner", "-h", "encoder=h264_nvenc")
+    Run-Cmd -Title "ffmpeg -version" -FilePath $ffmpeg -CmdArgs @("-hide_banner", "-version")
+    Run-Cmd -Title "ffmpeg -encoders (nvenc/qsv/amf/x264)" -FilePath $ffmpeg -CmdArgs @("-hide_banner", "-encoders")
+    Run-Cmd -Title "ffmpeg -h encoder=h264_nvenc" -FilePath $ffmpeg -CmdArgs @("-hide_banner", "-h", "encoder=h264_nvenc")
 
-    Run-Cmd -Title "NVENC smoke test (minimal)" -FilePath $ffmpeg -Args @(
+    Run-Cmd -Title "NVENC smoke test (minimal)" -FilePath $ffmpeg -CmdArgs @(
         "-hide_banner",
         "-loglevel", "verbose",
         "-f", "lavfi",
@@ -131,7 +131,7 @@ if ($ffmpeg) {
         "NUL"
     )
 
-    Run-Cmd -Title "NVENC smoke test (app-like flags)" -FilePath $ffmpeg -Args @(
+    Run-Cmd -Title "NVENC smoke test (app-like flags)" -FilePath $ffmpeg -CmdArgs @(
         "-hide_banner",
         "-loglevel", "verbose",
         "-f", "lavfi",
