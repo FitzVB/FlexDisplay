@@ -47,14 +47,7 @@ This allows your Android device to act as an **extra monitor** (extended display
 
 ### How to install it
 
-**Option A — Automatic (recommended):**
-1. Open the folder where you extracted FlexDisplay.
-2. Double-click `SETUP_AND_START.bat` and follow the on-screen instructions.
-   The setup will handle everything for you.
 
-**Option B — Manual:**
-1. Go to: **[github.com/VirtualDrivers/Virtual-Display-Driver/releases](https://github.com/VirtualDrivers/Virtual-Display-Driver/releases)**
-2. Download the latest installer (the `.exe` file, for example `Virtual-Driver-Control-Installer.exe`).
 3. Run the installer and click **Install**.
 4. When it finishes, **restart your PC** once.
 
@@ -85,7 +78,7 @@ After restarting, go to **Settings → System → Display** and you should see a
 
 ### Wi-Fi mode
 
-1. Make sure the PC and tablet are on the **same Wi-Fi network**.
+1. Make sure the PC and Android device are on the **same Wi-Fi network**.
 2. When you start `START.bat` you will see a message like:
    `[OK] Wi-Fi host IP detected: 192.168.1.50`
    That number is your PC's IP address.
@@ -112,19 +105,19 @@ Inside the FlexDisplay app on the Android device you will see two options:
 Close the black window (terminal) that opened when you ran `START.bat`.
 The program will stop automatically and clean up all background processes.
 
-You can also double-click **`scripts\STOP.bat`** to stop it without closing the terminal.
+You can also double-click **`STOP.bat`** (inside the `scripts` folder) to stop it without closing the terminal.
 
 ---
 
 ## Common problems
 
-### the Android device does not appear on the PC (USB mode)
+### The Android device does not appear on the PC (USB mode)
 - Make sure the USB cable transfers data (not charge-only).
 - Go to **Settings → Developer options** on the Android device and enable **USB debugging**.
 - Accept the authorization prompt on the Android device screen.
 
 ### The app shows "Cannot connect" (Wi-Fi mode)
-- Verify that the PC and tablet are on the **same Wi-Fi network**.
+- Verify that the PC and Android device are on the **same Wi-Fi network**.
 - Check that the IP number in the app matches exactly what the program showed at startup.
 - Temporarily disable antivirus or firewall on the PC to test.
 

@@ -10,7 +10,7 @@
 | Elemento | Detalles |
 |---|---|
 | PC con Windows 10 u 11 | 64 bits, cualquier marca |
-| Tablet o teléfono Android | Android 8 o superior |
+| Dispositivo Android (teléfono o tablet) | Android 8 o superior |
 | Cable USB **o** red Wi-Fi | Cualquiera de los dos funciona |
 | La aplicación FlexDisplay instalada en Android | El archivo `.apk` está incluido en el paquete |
 
@@ -30,7 +30,7 @@
 1. En tu dispositivo Android, ve a **Ajustes → Seguridad** (o *Aplicaciones*) y activa **"Fuentes desconocidas"** (o **"Instalar apps desconocidas"**).
    *(Solo necesitas hacer esto una vez.)*
 2. Conecta el dispositivo al PC por USB.
-3. Copia el archivo `FlexDisplay.apk` (está dentro del ZIP que extrajiste) a el dispositivo Android.
+3. Copia el archivo `FlexDisplay.apk` (está dentro del ZIP que extrajiste) al dispositivo Android.
 4. Abre el archivo `.apk` desde el dispositivo Android y confirma la instalación.
 
 ---
@@ -44,14 +44,8 @@ Esto permite que tu dispositivo Android funcione como un **monitor extra** (pant
 
 ### Cómo instalarlo
 
-**Opción A (automática):**
-1. Abre la carpeta donde extrajiste FlexDisplay.
-2. Haz doble clic en `SETUP_AND_START.bat` y sigue las instrucciones en pantalla.
-   El instalador hará todo por ti.
-
-**Opción B (manual):**
 1. Ve a: **[github.com/VirtualDrivers/Virtual-Display-Driver/releases](https://github.com/VirtualDrivers/Virtual-Display-Driver/releases)**
-2. Descarga el instalador (el archivo `.exe` más reciente, por ejemplo `Virtual-Driver-Control-Installer.exe`).
+2. Descarga el instalador más reciente (el archivo `.exe`, por ejemplo `Virtual-Driver-Control-Installer.exe`).
 3. Ejecuta el instalador y haz clic en **Install**.
 4. Cuando termine, **reinicia el PC** una vez.
 
@@ -109,19 +103,19 @@ Para el modo **Extended** necesitas tener instalado el VDD (Paso 3).
 Cierra la ventana negra (terminal) que se abrió al ejecutar `START.bat`.
 El programa se cerrará automáticamente y limpiará todos los procesos en segundo plano.
 
-También puedes hacer doble clic en **`scripts\STOP.bat`** para detenerlo sin cerrar la terminal.
+También puedes hacer doble clic en **`STOP.bat`** (dentro de la carpeta `scripts`) para detenerlo sin cerrar la terminal.
 
 ---
 
 ## Problemas comunes
 
-### el dispositivo Android no aparece en el PC (modo USB)
+### El dispositivo Android no aparece en el PC (modo USB)
 - Asegúrate de que el cable USB transfiere datos (no solo carga).
 - Ve a **Ajustes → Opciones de desarrollador** en el dispositivo Android y activa **Depuración USB**.
-- Acepta el mensaje de autorización en la pantalla de el dispositivo Android.
+- Acepta el mensaje de autorización en la pantalla del dispositivo Android.
 
 ### La app muestra "No se puede conectar" (modo Wi-Fi)
-- Verifica que PC y tablet están en la **misma red Wi-Fi**.
+- Verifica que el PC y el dispositivo Android están en la **misma red Wi-Fi**.
 - Comprueba que el número IP en la app es exactamente el que mostró el programa al iniciar.
 - Desactiva temporalmente el antivirus o firewall del PC para probar.
 

@@ -265,21 +265,31 @@ function Copy-RequiredFiles {
     if (Test-Path (Join-Path $RepoRoot "README.md")) {
         Copy-Item (Join-Path $RepoRoot "README.md") (Join-Path $DistRoot "README.md") -Force
     }
+    foreach ($guide in @("QUICK-START.md", "QUICK-START.es.md")) {
+        $src = Join-Path $RepoRoot $guide
+        if (Test-Path $src) {
+            Copy-Item $src (Join-Path $DistRoot $guide) -Force
+        }
+    }
 
     $quick = @"
-FlexDisplay - Lightweight distribution
+FlexDisplay - Quick Start
 
-1. Run START.bat
+1. Double-click START.bat
 2. Select USB or Wi-Fi mode
-3. In USB mode, APK is auto-installed when a device is connected
+3. In USB mode the app is auto-installed when an Android device is connected
 
-Runtime:
-- If bundled: .runtime\\adb and .runtime\\ffmpeg are already included
-- If not bundled: they are downloaded automatically on first launch from official sources
+First run:
+  ADB and FFmpeg are downloaded automatically from official sources on first launch.
+  An internet connection is required the first time only.
 
-Notes:
-- Virtual display driver is installed at system level.
-- If this is the first time installing virtual display support, reboot once if needed.
+Extended display (optional):
+  If you want to use your Android device as an extra monitor (not just a mirror),
+  you need to install the Virtual Display Driver first:
+  https://github.com/VirtualDrivers/Virtual-Display-Driver/releases
+  Download the .exe installer, run it, click Install, then reboot once.
+
+For the full manual: see README.md or https://github.com/FitzVB/tablet-second-monitor
 "@
     Set-Content -Path (Join-Path $DistRoot "QUICK_START.txt") -Value $quick -Encoding UTF8
 
@@ -314,9 +324,10 @@ if (Test-Path $zipPath) {
 $hostExe = Build-HostRelease
 $apkPath = Resolve-ApkPath
 if (-not $SkipBundledRuntime) {
-    Prepare-MinRuntime -DistRoot $distRoot
+    Write-Step "Skipping bundled runtime by default (will download on first run)"
+    Write-Host "    Pass -SkipBundledRuntime:$false to bundle ADB + FFmpeg inside the ZIP." -ForegroundColor Gray
 } else {
-    Write-Step "Skipping bundled runtime (will download on first run)"
+    Prepare-MinRuntime -DistRoot $distRoot
 }
 Copy-RequiredFiles -DistRoot $distRoot -HostExe $hostExe -ApkPath $apkPath
 
