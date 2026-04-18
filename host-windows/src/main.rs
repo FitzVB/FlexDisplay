@@ -1520,6 +1520,13 @@ fn ffmpeg_exe() -> std::path::PathBuf {
             return sibling;
         }
         if let Some(dir) = exe.parent() {
+            // Prefer repository/package-local runtime ffmpeg so behavior is
+            // deterministic across machines and independent from globally
+            // installed WinGet ffmpeg builds.
+            let in_runtime = dir.join(".runtime").join("ffmpeg").join("bin").join(name);
+            if in_runtime.exists() {
+                return in_runtime;
+            }
             let in_bin = dir.join("bin").join(name);
             if in_bin.exists() {
                 return in_bin;
