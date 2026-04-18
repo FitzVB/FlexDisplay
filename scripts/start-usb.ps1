@@ -150,6 +150,19 @@ if (-not $adbPath) {
 
 Write-Host "[*] Using ADB: $adbPath" -ForegroundColor Gray
 
+# Kill any stale ADB daemon before starting — prevents zombie server blocking reconnection
+Write-Host '[*] Resetting ADB server (clearing stale connections)...' -ForegroundColor Cyan
+& $adbPath kill-server 2>$null | Out-Null
+
+# Register cleanup: runs when terminal window closes or PowerShell engine exits
+Register-EngineEvent PowerShell.Exiting -MessageData $adbPath -Action {
+    Stop-Process -Name 'host-windows' -Force -ErrorAction SilentlyContinue
+    Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*--app=*9001*' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    if ($event.MessageData) { & $event.MessageData kill-server 2>$null }
+} | Out-Null
+
 # Detect connected devices
 Write-Host "[*] Checking USB devices..." -ForegroundColor Cyan
 $adbOut = & $adbPath devices -l
@@ -242,18 +255,38 @@ foreach ($ownerPid in $portOwners) {
 $env:TABLET_MONITOR_LISTEN = '127.0.0.1'
 $env:TABLET_MONITOR_FPS = '60'
 
+function Invoke-Cleanup {
+    param([string]$AdbExe)
+    Stop-Process -Name 'host-windows' -Force -ErrorAction SilentlyContinue
+    Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*--app=*9001*' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    if ($AdbExe -and (Test-Path $AdbExe)) { & $AdbExe kill-server 2>$null | Out-Null }
+    Write-Host '[OK] Cleanup done.' -ForegroundColor Green
+}
+
 $hostExe = Resolve-HostExePath -Root $root
 if ($hostExe) {
     $hostDir = Split-Path -Parent $hostExe
     Set-Location $hostDir
-    & $hostExe
-    exit $LASTEXITCODE
+    try {
+        & $hostExe
+        $exitCode = $LASTEXITCODE
+    } finally {
+        Invoke-Cleanup -AdbExe $adbPath
+    }
+    exit $exitCode
 }
 
 if (Test-Path (Join-Path $root "host-windows\Cargo.toml")) {
     Set-Location (Join-Path $root "host-windows")
-    cargo run --release
-    exit $LASTEXITCODE
+    try {
+        cargo run --release
+        $exitCode = $LASTEXITCODE
+    } finally {
+        Invoke-Cleanup -AdbExe $adbPath
+    }
+    exit $exitCode
 }
 
 Write-Host "[ERROR] Host executable not found." -ForegroundColor Red

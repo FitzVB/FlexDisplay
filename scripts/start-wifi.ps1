@@ -56,8 +56,8 @@ if ($lanIp) {
 Write-Host ""
 Write-Host "[*] Starting host on 0.0.0.0:9001 ..." -ForegroundColor Cyan
 
+# Kill any previous instance on port 9001 before starting fresh
 Stop-Process -Name "host-windows" -Force -ErrorAction SilentlyContinue
-
 $portOwners = Get-NetTCPConnection -LocalPort 9001 -State Listen -ErrorAction SilentlyContinue |
     Select-Object -ExpandProperty OwningProcess -Unique
 foreach ($ownerPid in $portOwners) {
@@ -69,18 +69,44 @@ foreach ($ownerPid in $portOwners) {
 $root = Split-Path -Parent $PSScriptRoot
 $env:TABLET_MONITOR_FPS = '60'
 
+# Register cleanup: runs when terminal window closes or PowerShell engine exits
+Register-EngineEvent PowerShell.Exiting -Action {
+    Stop-Process -Name 'host-windows' -Force -ErrorAction SilentlyContinue
+    Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*--app=*9001*' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+} | Out-Null
+
+function Invoke-Cleanup {
+    Stop-Process -Name 'host-windows' -Force -ErrorAction SilentlyContinue
+    Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*--app=*9001*' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Write-Host '[OK] Cleanup done.' -ForegroundColor Green
+}
+
 $hostExe = Resolve-HostExePath -Root $root
 if ($hostExe) {
     $hostDir = Split-Path -Parent $hostExe
     Set-Location $hostDir
-    & $hostExe
-    exit $LASTEXITCODE
+    try {
+        & $hostExe
+        $exitCode = $LASTEXITCODE
+    } finally {
+        Invoke-Cleanup
+    }
+    exit $exitCode
 }
 
 if (Test-Path (Join-Path $root "host-windows\Cargo.toml")) {
     Set-Location (Join-Path $root "host-windows")
-    cargo run --release
-    exit $LASTEXITCODE
+    try {
+        cargo run --release
+        $exitCode = $LASTEXITCODE
+    } finally {
+        Invoke-Cleanup
+    }
+    exit $exitCode
 }
 
 Write-Host "[ERROR] Host executable not found." -ForegroundColor Red
