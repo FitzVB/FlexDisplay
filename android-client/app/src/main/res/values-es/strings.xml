@@ -47,6 +47,7 @@
     <string name="profile_pending">perfil: pendiente</string>
     <string name="profile_waiting_host_cfg">perfil: esperando config del host</string>
     <string name="profile_active_format">perfil: %1$s  •  %2$s  •  %3$sfps  •  %4$s kbps</string>
+    <string name="profile_active_format_extended">perfil: %1$s (%2$s)  •  %3$s  •  %4$sfps  •  %5$s kbps</string>
     <string name="profile_changed_log">Perfil actualizado: %1$s</string>
     <string name="resolution_pending">resolucion pendiente  •  %1$d kbps rx</string>
     <string name="logo_content_desc">Logo de FlexDisplay</string>

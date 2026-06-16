@@ -19,6 +19,7 @@ $runtimeEnv = Join-Path $PSScriptRoot "runtime-env.ps1"
 if (Test-Path $runtimeEnv) {
     . $runtimeEnv -RootPath (Split-Path -Parent $PSScriptRoot)
 }
+. (Join-Path $PSScriptRoot "lib\Common.ps1")
 
 function Add-PathIfExists {
     param([string]$PathToAdd)
@@ -82,23 +83,6 @@ function Parse-ConnectedDevices {
     return , $devices
 }
 
-function Resolve-HostExePath {
-    param([string]$Root)
-
-    $candidates = @(
-        (Join-Path $Root "host-windows\target\release\host-windows.exe"),
-        (Join-Path $Root "host-windows.exe")
-    )
-
-    foreach ($candidate in $candidates) {
-        if (Test-Path $candidate) {
-            return $candidate
-        }
-    }
-
-    return $null
-}
-
 function Resolve-ApkPath {
     param([string]$Root)
 
@@ -156,11 +140,7 @@ Write-Host '[*] Resetting ADB server (clearing stale connections)...' -Foregroun
 
 # Register cleanup: runs when terminal window closes or PowerShell engine exits
 Register-EngineEvent PowerShell.Exiting -MessageData $adbPath -Action {
-    Stop-Process -Name 'host-windows' -Force -ErrorAction SilentlyContinue
-    Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like '*--app=*9001*' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    if ($event.MessageData) { & $event.MessageData kill-server 2>$null }
+    Invoke-FlexDisplayCleanup -AdbExe $event.MessageData -Port 9001
 } | Out-Null
 
 # Detect connected devices
@@ -259,29 +239,13 @@ if ($selectedSerial) {
 Write-Host ""
 Write-Host "[*] Starting server..." -ForegroundColor Cyan
 
-Stop-Process -Name "host-windows" -Force -ErrorAction SilentlyContinue
-
-$portOwners = Get-NetTCPConnection -LocalPort 9001 -State Listen -ErrorAction SilentlyContinue |
-Select-Object -ExpandProperty OwningProcess -Unique
-foreach ($ownerPid in $portOwners) {
-    if ($ownerPid -and $ownerPid -ne $PID) {
-        Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
-    }
-}
+Stop-FlexDisplayHost -Port 9001
 
 $env:FLEXDISPLAY_LISTEN = '127.0.0.1'
 $env:FLEXDISPLAY_FPS = '60'
 
 function Invoke-Cleanup {
-    param([string]$AdbExe)
-    Stop-Process -Name 'host-windows' -Force -ErrorAction SilentlyContinue
-    Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like '*--app=*9001*' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    if ($AdbExe -and (Test-Path $AdbExe)) { & $AdbExe kill-server 2>$null | Out-Null }
-    # Stop logcat background job if running
-    Get-Job | Where-Object { $_.State -eq 'Running' } | Stop-Job -PassThru | Remove-Job -Force -ErrorAction SilentlyContinue
-    Write-Host '[OK] Cleanup done.' -ForegroundColor Green
+    Invoke-FlexDisplayCleanup -AdbExe $adbPath -Port 9001
 }
 
 $hostExe = Resolve-HostExePath -Root $root
@@ -293,7 +257,7 @@ if ($hostExe) {
         $exitCode = $LASTEXITCODE
     }
     finally {
-        Invoke-Cleanup -AdbExe $adbPath
+        Invoke-Cleanup
     }
     exit $exitCode
 }
@@ -305,7 +269,7 @@ if (Test-Path (Join-Path $root "host-windows\Cargo.toml")) {
         $exitCode = $LASTEXITCODE
     }
     finally {
-        Invoke-Cleanup -AdbExe $adbPath
+        Invoke-Cleanup
     }
     exit $exitCode
 }

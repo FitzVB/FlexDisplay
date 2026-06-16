@@ -94,18 +94,21 @@ function Check-ABDReverse {
 }
 
 function Check-FFmpegEncoders {
-    $encoders = @("h264_nvenc", "h264_qsv", "h264_amf", "libx264")
-    $available = @()
-
-    foreach ($encoder in $encoders) {
-        $check = ffmpeg -codecs 2>&1 | Select-String $encoder
-        if ($check) {
-            $available += $encoder
+    $lib = Join-Path $ScriptPath "lib\Common.ps1"
+    if (Test-Path $lib) {
+        . $lib
+        $available = Get-VendorFilteredEncoders
+    } else {
+        $encoders = @("h264_nvenc", "h264_qsv", "h264_amf", "libx264")
+        $available = @()
+        $text = ffmpeg -hide_banner -encoders 2>&1 | Out-String
+        foreach ($encoder in $encoders) {
+            if ($text -match $encoder) { $available += $encoder }
         }
     }
 
     if ($available.Count -gt 0) {
-        Write-Host "✓ Available H.264 encoders: $($available -join ', ')" -ForegroundColor Green
+        Write-Host "✓ Available H.264 encoders (vendor-filtered): $($available -join ', ')" -ForegroundColor Green
         $HealthStatus.OK++
         return $true
     } else {

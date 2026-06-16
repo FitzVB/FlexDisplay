@@ -49,16 +49,18 @@ import java.util.concurrent.TimeUnit
 class MainActivity : AppCompatActivity() {
 
     companion object {
-        // USB profile: balance image quality with low interaction latency on CPU fallback.
-        private const val STREAM_TARGET_FPS = 60
-        private const val STREAM_TARGET_BITRATE_KBPS = 10000
-        private const val MAX_STREAM_WIDTH = 1280.0
-        private const val MAX_STREAM_HEIGHT = 720.0
-        // Decoder tolerance: host can now be controlled from PC with fixed presets up to 1080p.
-        // Configure MediaCodec with a stable max size so hot profile changes don't black-screen
-        // when host resolution differs from the initial client-requested size.
+        // Adaptive stream sizing: native device resolution capped by transport (host refines per encoder).
+        private const val USB_MAX_STREAM_WIDTH = 1920.0
+        private const val USB_MAX_STREAM_HEIGHT = 1200.0
+        private const val WIFI_MAX_STREAM_WIDTH = 1280.0
+        private const val WIFI_MAX_STREAM_HEIGHT = 720.0
+        private const val STREAM_FPS_USB = 60
+        private const val STREAM_FPS_WIFI = 30
+        private const val STREAM_BITRATE_USB_KBPS = 8000
+        private const val STREAM_BITRATE_WIFI_KBPS = 5000
+        // Decoder tolerance for adaptive profiles up to 1920×1200.
         private const val DECODER_MAX_WIDTH = 1920
-        private const val DECODER_MAX_HEIGHT = 1080
+        private const val DECODER_MAX_HEIGHT = 1200
         private const val INPUT_MOVE_SEND_INTERVAL_MS = 8L
         private const val PREFS_NAME = "tablet_monitor_prefs"
         private const val PREF_LANGUAGE = "app_language"
@@ -262,6 +264,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun isUsbTransport(hostIp: String): Boolean {
+        val ip = hostIp.trim()
+        return ip == "127.0.0.1" ||
+            ip.equals("localhost", ignoreCase = true) ||
+            ip == "::1"
+    }
+
+    private fun computeAdaptiveStreamSize(rawW: Int, rawH: Int, usb: Boolean): Pair<Int, Int> {
+        val maxW = if (usb) USB_MAX_STREAM_WIDTH else WIFI_MAX_STREAM_WIDTH
+        val maxH = if (usb) USB_MAX_STREAM_HEIGHT else WIFI_MAX_STREAM_HEIGHT
+        val scale = minOf(maxW / rawW, maxH / rawH, 1.0)
+        val w = (rawW * scale).toInt().coerceAtLeast(320) and 0x7FFFFFF0
+        val h = (rawH * scale).toInt().coerceAtLeast(240) and 0x7FFFFFF0
+        return w to h
+    }
+
     private fun startH264Stream() {
         clearStreamSurface()
         streamContainer.visibility = View.VISIBLE
@@ -294,12 +312,13 @@ class MainActivity : AppCompatActivity() {
         val rawW = metrics.widthPixels.coerceAtLeast(1)
         val rawH = metrics.heightPixels.coerceAtLeast(1)
 
-        // USB profile cap: keep high detail while staying within common decoder limits.
-        val scale = minOf(MAX_STREAM_WIDTH / rawW, MAX_STREAM_HEIGHT / rawH, 1.0)
-        val targetW = (rawW * scale).toInt().coerceAtLeast(320) and 0x7FFFFFF0
-        val targetH = (rawH * scale).toInt().coerceAtLeast(240) and 0x7FFFFFF0
-
         val ip = serverIpInput.text.toString().trim().ifBlank { "127.0.0.1" }
+        val usbTransport = isUsbTransport(ip)
+        val (targetW, targetH) = computeAdaptiveStreamSize(rawW, rawH, usbTransport)
+        val targetFps = if (usbTransport) STREAM_FPS_USB else STREAM_FPS_WIFI
+        val targetBitrate = if (usbTransport) STREAM_BITRATE_USB_KBPS else STREAM_BITRATE_WIFI_KBPS
+        val transportParam = if (usbTransport) "usb" else "wifi"
+
         val displayMode = normalizedDisplayMode()
         val displayQuery = displayInput.text.toString().trim().toIntOrNull()?.coerceIn(0, 9)
             ?.let { "&display=$it" }
@@ -327,7 +346,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         val fitMode = if (displayMode == "mirror") "contain" else "cover"
-        val streamUrl = "$baseUrl/h264?w=$targetW&h=$targetH&fps=$STREAM_TARGET_FPS&bitrate_kbps=$STREAM_TARGET_BITRATE_KBPS&fit=$fitMode&mode=$displayMode$displayQuery"
+        appendLog("Adaptive stream request: ${targetW}x${targetH} @ ${targetFps}fps (${transportParam}, device ${rawW}x${rawH})")
+        val streamUrl = "$baseUrl/h264?w=$targetW&h=$targetH&fps=$targetFps&bitrate_kbps=$targetBitrate&fit=$fitMode&mode=$displayMode&profile=auto&transport=$transportParam$displayQuery"
         val request = Request.Builder().url(streamUrl).build()
 
         reconnectHandler.removeCallbacks(streamStallWatchdog)
@@ -737,14 +757,29 @@ class MainActivity : AppCompatActivity() {
             "h264_amf" -> "AMF H.264"
             "h264_nvenc" -> "NVENC H.264"
             "h264_qsv" -> "QSV H.264"
-            "libx264" -> "x264"
+            "libx264" -> "x264 (CPU)"
             else -> encoderRaw
         }
+        val captureRaw = map["capture"] ?: "?"
+        val captureLabel = when (captureRaw.lowercase()) {
+            "ddagrab" -> "DXGI"
+            "gdigrab" -> "GDI"
+            else -> captureRaw
+        }
+        val profileMode = map["profile"] ?: "auto"
+        val transport = map["transport"] ?: "?"
         val resolution = "${map["w"] ?: "?"}x${map["h"] ?: "?"}"
         val fps = map["fps"] ?: "?"
         val bitrate = map["bitrate_kbps"] ?: "?"
 
-        return getString(R.string.profile_active_format, encoderLabel, resolution, fps, bitrate)
+        return getString(
+            R.string.profile_active_format_extended,
+            encoderLabel,
+            captureLabel,
+            resolution,
+            fps,
+            bitrate
+        ) + "  •  $profileMode/$transport"
     }
 
     /**
@@ -1113,7 +1148,7 @@ private class H264Decoder(
         }
 
         if (!codecStarted && pendingSps != null && pendingPps != null) {
-            if (!tryStartCodec(pendingSps!!, pendingPps!!)) {
+            if (!tryStartCodec(pendingSps!!, pendingPps!!, withCsd = true)) {
                 codecStartFailed = true
                 android.util.Log.e("H264Decoder", "Codec permanently failed to start; video disabled for this session")
                 return
@@ -1121,15 +1156,13 @@ private class H264Decoder(
         }
 
         if (!codecStarted && (pendingSps == null || pendingPps == null)) {
-            // Some streams/devices can delay or omit in-band SPS/PPS.
-            // Try a guarded start without csd after a short warmup.
             if (!missingParamWarned && nalCount >= 30) {
                 android.util.Log.w("H264Decoder", "Still waiting SPS/PPS after $nalCount NALs; trying no-csd start")
                 missingParamWarned = true
             }
             if (!triedNoCsdStart && nalCount >= 30) {
                 triedNoCsdStart = true
-                if (!tryStartCodecWithoutCsd()) {
+                if (!tryStartCodec(null, null, withCsd = false)) {
                     codecStartFailed = true
                     android.util.Log.e("H264Decoder", "Codec failed to start without CSD; video disabled for this session")
                     return
@@ -1188,64 +1221,51 @@ private class H264Decoder(
         codec.queueInputBuffer(index, 0, accessUnit.size, System.nanoTime() / 1000, 0)
     }
 
-    private fun tryStartCodec(sps: ByteArray, pps: ByteArray): Boolean {
-        val attempts = listOf(true, false)
-        for (fullConfig in attempts) {
-            try {
-                val format = MediaFormat.createVideoFormat("video/avc", width, height)
-                format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 2 * 1024 * 1024)
-                if (fullConfig) {
-                    format.setInteger(MediaFormat.KEY_PRIORITY, 0)
-                    format.setFloat(MediaFormat.KEY_OPERATING_RATE, 60f)
-                    format.setInteger(MediaFormat.KEY_FRAME_RATE, 60)
-                }
-                format.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(startCode + sps))
-                format.setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(startCode + pps))
-                codec.configure(format, surface, null, 0)
-                codec.start()
-                codecStarted = true
-                android.util.Log.i(
-                    "H264Decoder",
-                    "Codec started (${if (fullConfig) "full" else "fallback"}) with SPS(${sps.size}B)+PPS(${pps.size}B)"
-                )
-                return true
-            } catch (e: Exception) {
-                android.util.Log.e(
-                    "H264Decoder",
-                    "Codec start failed (${if (fullConfig) "full" else "fallback"}): ${e.javaClass.simpleName}: ${e.message}"
-                )
-                try {
-                    codec.reset()
-                } catch (_: Throwable) {
-                }
-            }
+    private fun tryStartCodec(sps: ByteArray?, pps: ByteArray?, withCsd: Boolean): Boolean {
+        if (tryStartCodecAt(sps, pps, withCsd, width, height)) return true
+        if (width > 1280 || height > 720) {
+            android.util.Log.w("H264Decoder", "Retrying codec at 1280x720 compatibility fallback")
+            return tryStartCodecAt(sps, pps, withCsd, 1280, 720)
         }
         return false
     }
 
-    private fun tryStartCodecWithoutCsd(): Boolean {
+    private fun tryStartCodecAt(
+        sps: ByteArray?,
+        pps: ByteArray?,
+        withCsd: Boolean,
+        decodeW: Int,
+        decodeH: Int
+    ): Boolean {
         val attempts = listOf(true, false)
         for (fullConfig in attempts) {
             try {
-                val format = MediaFormat.createVideoFormat("video/avc", width, height)
+                val format = MediaFormat.createVideoFormat("video/avc", decodeW, decodeH)
                 format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 2 * 1024 * 1024)
                 if (fullConfig) {
                     format.setInteger(MediaFormat.KEY_PRIORITY, 0)
                     format.setFloat(MediaFormat.KEY_OPERATING_RATE, 60f)
                     format.setInteger(MediaFormat.KEY_FRAME_RATE, 60)
                 }
+                if (withCsd && sps != null && pps != null) {
+                    format.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(startCode + sps))
+                    format.setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(startCode + pps))
+                }
                 codec.configure(format, surface, null, 0)
                 codec.start()
                 codecStarted = true
-                android.util.Log.i(
-                    "H264Decoder",
-                    "Codec started (${if (fullConfig) "no-csd-full" else "no-csd-fallback"}) at ${width}x${height}"
-                )
+                val mode = when {
+                    withCsd && fullConfig -> "full"
+                    withCsd && !fullConfig -> "fallback"
+                    !withCsd && fullConfig -> "no-csd-full"
+                    else -> "no-csd-fallback"
+                }
+                android.util.Log.i("H264Decoder", "Codec started ($mode) at ${decodeW}x${decodeH}")
                 return true
             } catch (e: Exception) {
                 android.util.Log.e(
                     "H264Decoder",
-                    "Codec no-csd start failed (${if (fullConfig) "full" else "fallback"}): ${e.javaClass.simpleName}: ${e.message}"
+                    "Codec start failed at ${decodeW}x${decodeH}: ${e.javaClass.simpleName}: ${e.message}"
                 )
                 try {
                     codec.reset()

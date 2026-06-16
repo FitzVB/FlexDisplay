@@ -1,21 +1,26 @@
+mod capture;
+mod encoder;
+mod ffmpeg;
 mod input;
+mod profile;
+mod settings;
+mod stream;
 
+use encoder::{detect_available_h264_encoders, detect_gpus, GpuInfo};
+use ffmpeg::adb_exe;
+use settings::{
+    canonical_bitrate_kbps, canonical_encoder, canonical_preset, canonical_resolution,
+    load_host_settings_from_disk, save_host_settings_to_disk, EnvConfig, HostSettings,
+};
 use std::sync::Arc;
-
-use futures::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
+use stream::{handle_h264_stream, StreamQuery};
 use tokio::sync::{watch, RwLock};
-use tracing::{error, info, warn};
-use warp::ws::Message;
+use tracing::info;
 use warp::Filter;
 
 #[cfg(windows)]
 fn enable_dpi_awareness() {
     unsafe {
-        // Ensure monitor geometry/capture runs in physical pixels, not DPI-virtualized coords.
-        // This prevents mirror-mode crops where the bottom taskbar area is missing.
         winapi::um::winuser::SetProcessDPIAware();
     }
 }
@@ -23,200 +28,22 @@ fn enable_dpi_awareness() {
 #[cfg(not(windows))]
 fn enable_dpi_awareness() {}
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-struct HostSettings {
-    preferred_encoder: Option<String>,
-    preferred_amf_device: Option<u32>,
-    /// Named quality preset — overrides width/height/fps/bitrate when set.
-    preferred_preset: Option<String>,
-    // Legacy manual overrides (ignored when preferred_preset is set).
-    preferred_width: Option<u32>,
-    preferred_height: Option<u32>,
-    preferred_bitrate_kbps: Option<u32>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct GpuInfo {
-    index: usize,
-    name: String,
-    driver_version: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 struct HostCapabilities {
     encoders: Vec<String>,
     gpus: Vec<GpuInfo>,
 }
 
-fn canonical_encoder(value: Option<String>) -> Option<String> {
-    let raw = value?.trim().to_ascii_lowercase();
-    match raw.as_str() {
-        "h264_nvenc" | "h264_qsv" | "h264_amf" | "libx264" => Some(raw),
-        _ => None,
-    }
-}
-
-fn canonical_resolution(width: Option<u32>, height: Option<u32>) -> (Option<u32>, Option<u32>) {
-    let allowed = [
-        (800u32, 600u32),
-        (1024u32, 768u32),
-        (1280u32, 720u32),
-        (1600u32, 900u32),
-        (1920u32, 1080u32),
-    ];
-    match (width, height) {
-        (Some(w), Some(h)) if allowed.contains(&(w, h)) => (Some(w), Some(h)),
-        _ => (None, None),
-    }
-}
-
-fn canonical_bitrate_kbps(value: Option<u32>) -> Option<u32> {
-    let allowed = [
-        3000u32, 5000u32, 10000u32, 15000u32, 25000u32, 30000u32, 50000u32,
-    ];
-    let v = value?;
-    if allowed.contains(&v) {
-        Some(v)
-    } else {
-        None
-    }
-}
-
-fn canonical_preset(value: Option<String>) -> Option<String> {
-    let v = value?.trim().to_ascii_lowercase();
-    match v.as_str() {
-        "ahorro" | "equilibrado" | "alta_720p" | "fluido_900p" | "full_hd" | "full_hd_max" => {
-            Some(v)
-        }
-        _ => None,
-    }
-}
-
-/// Returns (width, height, fps, bitrate_kbps) for a named quality preset.
-/// Values are already macroblock-aligned (multiples of 16).
-fn resolve_preset(name: &str) -> Option<(u32, u32, u32, u32)> {
-    match name {
-        "ahorro" => Some((960, 544, 30, 5_000)),
-        "equilibrado" => Some((1280, 720, 60, 10_000)),
-        "alta_720p" => Some((1280, 720, 60, 15_000)),
-        "fluido_900p" => Some((1600, 900, 60, 20_000)),
-        "full_hd" => Some((1920, 1080, 60, 25_000)),
-        "full_hd_max" => Some((1920, 1080, 60, 35_000)),
-        _ => None,
-    }
-}
-
-fn settings_file_path() -> std::path::PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            return dir.join("host-settings.json");
-        }
-    }
-    std::path::PathBuf::from("host-settings.json")
-}
-
-fn load_host_settings_from_disk() -> HostSettings {
-    let path = settings_file_path();
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return HostSettings::default();
-    };
-    serde_json::from_str::<HostSettings>(&text).unwrap_or_default()
-}
-
-fn save_host_settings_to_disk(settings: &HostSettings) {
-    let path = settings_file_path();
-    if let Ok(text) = serde_json::to_string_pretty(settings) {
-        let _ = std::fs::write(path, text);
-    }
-}
-
-fn detect_available_h264_encoders() -> Vec<String> {
-    let output = std::process::Command::new(ffmpeg_exe())
-        .arg("-hide_banner")
-        .arg("-encoders")
-        .output();
-
-    let Ok(out) = output else {
-        return vec!["libx264".to_string()];
-    };
-
-    // Report every encoder that ffmpeg was compiled with support for.
-    // We do NOT filter by WMI GPU vendor here: WMI can miss GPUs that are
-    // NVENC-capable (Optimus, eGPUs, driver layering). The stream-attempt
-    // fallback loop already probes each encoder at runtime and skips to the
-    // next candidate if the encoder fails to produce any bytes.
-    let text = String::from_utf8_lossy(&out.stdout).to_ascii_lowercase();
-    let mut found = Vec::new();
-    for enc in ["h264_nvenc", "h264_qsv", "h264_amf", "libx264"] {
-        if text.contains(enc) {
-            found.push(enc.to_string());
-        }
-    }
-    if found.is_empty() {
-        found.push("libx264".to_string());
-    }
-    found
-}
-
-fn detect_gpus() -> Vec<GpuInfo> {
-    #[derive(Debug, Deserialize)]
-    struct PsGpu {
-        #[serde(rename = "Name")]
-        name: Option<String>,
-        #[serde(rename = "DriverVersion")]
-        driver_version: Option<String>,
-    }
-
-    let ps = r#"Get-CimInstance Win32_VideoController |
-Select-Object Name,DriverVersion |
-ConvertTo-Json -Compress"#;
-    let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", ps])
-        .output();
-
-    let Ok(out) = output else {
-        return Vec::new();
-    };
-
-    if out.stdout.is_empty() {
-        return Vec::new();
-    }
-
-    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if text.is_empty() {
-        return Vec::new();
-    }
-
-    let mut parsed: Vec<PsGpu> = match serde_json::from_str::<Vec<PsGpu>>(&text) {
-        Ok(v) => v,
-        Err(_) => match serde_json::from_str::<PsGpu>(&text) {
-            Ok(one) => vec![one],
-            Err(_) => Vec::new(),
-        },
-    };
-
-    parsed
-        .drain(..)
-        .enumerate()
-        .map(|(idx, g)| GpuInfo {
-            index: idx,
-            name: g.name.unwrap_or_else(|| "Unknown GPU".to_string()),
-            driver_version: g.driver_version.unwrap_or_default(),
-        })
-        .collect()
-}
-
 fn logo_png_bytes() -> &'static [u8] {
-    // Minimal 1x1 transparent PNG (placeholder — replace FlexDisplay_Logo.png at repo root to use a real logo)
     &[
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
-        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk length + type
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // width=1, height=1
-        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, // 8-bit RGBA, CRC
-        0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, // IDAT chunk
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+        0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41,
         0x54, 0x78, 0x9C, 0x62, 0x00, 0x00, 0x00, 0x02,
         0x00, 0x01, 0xE5, 0x27, 0xDE, 0xFC, 0x00, 0x00,
-        0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, // IEND chunk
+        0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42,
         0x60, 0x82,
     ]
 }
@@ -317,7 +144,7 @@ fn host_gui_html() -> &'static str {
             <button id="refresh">Reload detection</button>
         </div>
         <div id="status" class="status"></div>
-        <div class="hint">Save and apply persists the selected profile and restarts active stream safely. Preferred GPU adapter is only used when a hardware encoder path needs explicit device selection. Reload detection refreshes available encoders/GPUs.</div>
+        <div class="hint">Save locks the selected encoder (no automatic HW fallback). Reload detection refreshes vendor-filtered encoders and GPUs.</div>
     </div>
 <script>
 let statusTimer = null;
@@ -361,18 +188,20 @@ async function loadAll(){
         o.textContent=`#${g.index} - ${g.name}${g.driver_version ? ' (' + g.driver_version + ')' : ''}`;
         gpu.appendChild(o);
     });
-    gpu.value = (set.preferred_amf_device ?? '') === '' ? '' : String(set.preferred_amf_device);
+    const gpuPref = set.preferred_nvenc_gpu ?? set.preferred_amf_device ?? '';
+    gpu.value = gpuPref === '' ? '' : String(gpuPref);
 
     const preset = document.getElementById('preset');
     preset.innerHTML = '';
     presetDefs = [
-        { value: '',           label: 'Auto (from client)', detail: 'Host follows device stream request. Best for quick testing.' },
-        { value: 'ahorro',     label: 'Power saver - 960x544 / 30fps / 5 Mbps', detail: 'Low bandwidth and battery impact for remote control tasks.' },
-        { value: 'equilibrado',label: 'Balanced - 1280x720 / 60fps / 10 Mbps', detail: 'Default smooth profile for most Android devices.' },
-        { value: 'alta_720p',  label: 'High quality 720p - 1280x720 / 60fps / 15 Mbps', detail: 'Sharper image while preserving 60fps responsiveness.' },
-        { value: 'fluido_900p',label: 'Smooth 900p - 1600x900 / 60fps / 20 Mbps', detail: 'Higher detail profile for stronger GPUs and USB links.' },
-        { value: 'full_hd',    label: 'Full HD office - 1920x1080 / 60fps / 25 Mbps', detail: '1080p profile optimized for productivity and text clarity.' },
-        { value: 'full_hd_max',label: 'Full HD detail - 1920x1080 / 60fps / 35 Mbps', detail: 'Maximum detail profile. Requires stable encoder and fast link.' },
+        { value: '',           label: 'Automatic (adaptive to device)', detail: 'Matches tablet native resolution (USB up to 1920×1200@60, Wi-Fi up to 1280×720@30). Encoder caps apply automatically.' },
+        { value: 'cpu_safe',    label: 'CPU safe - 960x544 / 30fps / 5 Mbps', detail: 'Optimized for libx264 software encoding on weak PCs.' },
+        { value: 'ahorro',      label: 'Power saver - 960x544 / 30fps / 5 Mbps', detail: 'Low bandwidth and battery impact for remote control tasks.' },
+        { value: 'equilibrado', label: 'Balanced - 1280x720 / 60fps / 10 Mbps', detail: 'Default smooth profile for most Android devices.' },
+        { value: 'alta_720p',   label: 'High quality 720p - 1280x720 / 60fps / 15 Mbps', detail: 'Sharper image while preserving 60fps responsiveness.' },
+        { value: 'fluido_900p', label: 'Smooth 900p - 1600x900 / 60fps / 20 Mbps', detail: 'Higher detail profile for stronger GPUs and USB links.' },
+        { value: 'full_hd',     label: 'Full HD office - 1920x1080 / 60fps / 25 Mbps', detail: '1080p profile optimized for productivity and text clarity.' },
+        { value: 'full_hd_max', label: 'Full HD detail - 1920x1080 / 60fps / 35 Mbps', detail: 'Maximum detail profile. Requires stable encoder and fast link.' },
     ];
     presetDefs.forEach(p => { const o=document.createElement('option'); o.value=p.value; o.textContent=p.label; preset.appendChild(o); });
     preset.value = set.preferred_preset || '';
@@ -391,9 +220,12 @@ async function save(){
     const saveBtn = document.getElementById('save');
     saveBtn.disabled = true;
     setStatus('Saving configuration...', 'busy');
+    const gpuVal = document.getElementById('gpu').value;
+    const encVal = document.getElementById('encoder').value || null;
     const payload = {
-        preferred_encoder: document.getElementById('encoder').value || null,
-        preferred_amf_device: document.getElementById('gpu').value === '' ? null : Number(document.getElementById('gpu').value),
+        preferred_encoder: encVal,
+        preferred_amf_device: (encVal === 'h264_amf' && gpuVal !== '') ? Number(gpuVal) : null,
+        preferred_nvenc_gpu: (encVal === 'h264_nvenc' && gpuVal !== '') ? Number(gpuVal) : null,
         preferred_preset: document.getElementById('preset').value || null,
         preferred_width: null,
         preferred_height: null,
@@ -431,7 +263,7 @@ loadAll();
 </html>"#
 }
 
-fn maybe_open_gui(listen_ip: std::net::Ipv4Addr) -> Option<std::sync::mpsc::Receiver<()>> {
+fn maybe_open_gui(listen_ip: std::net::Ipv4Addr, port: u16) -> Option<std::sync::mpsc::Receiver<()>> {
     if std::env::var("FLEXDISPLAY_DISABLE_AUTO_GUI")
         .ok()
         .as_deref()
@@ -448,10 +280,8 @@ fn maybe_open_gui(listen_ip: std::net::Ipv4Addr) -> Option<std::sync::mpsc::Rece
     } else {
         listen_ip.to_string()
     };
-    let url = format!("http://{host}:9001");
+    let url = format!("http://{host}:{port}");
 
-    // Prefer Edge app mode for an app-like desktop window (no tabs/address bar).
-    // Fallback to default browser if Edge is unavailable.
     let edge_paths = [
         "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
         "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -466,9 +296,6 @@ fn maybe_open_gui(listen_ip: std::net::Ipv4Addr) -> Option<std::sync::mpsc::Rece
                 std::thread::spawn(move || {
                     let started = std::time::Instant::now();
                     let _ = child.wait();
-                    // Some systems briefly spawn/tear-down the Edge app process while
-                    // transferring to an existing browser instance. Ignore those transient
-                    // exits so host does not stop immediately on startup.
                     if started.elapsed() >= std::time::Duration::from_secs(3) {
                         let _ = tx.send(());
                     }
@@ -485,18 +312,7 @@ fn maybe_open_gui(listen_ip: std::net::Ipv4Addr) -> Option<std::sync::mpsc::Rece
     None
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
-struct StreamQuery {
-    w: Option<u32>,
-    h: Option<u32>,
-    fps: Option<u32>,
-    bitrate_kbps: Option<u32>,
-    encoder: Option<String>,
-    mode: Option<String>,
-    display: Option<u32>,
-}
-
-#[derive(Clone, Debug, Deserialize, Default)]
+#[derive(Clone, Debug, serde::Deserialize, Default)]
 struct InputQuery {
     mode: Option<String>,
     display: Option<u32>,
@@ -511,13 +327,13 @@ async fn main() -> anyhow::Result<()> {
         .with_target(false)
         .init();
 
+    let env_config = EnvConfig::load();
     let host_settings = Arc::new(RwLock::new(load_host_settings_from_disk()));
     let host_settings_filter = warp::any().map({
         let settings = host_settings.clone();
         move || settings.clone()
     });
 
-    // Incremented whenever GUI settings are saved so active streams can restart in-place.
     let (settings_reload_tx, settings_reload_rx) = watch::channel(0u64);
     let settings_reload_tx_filter = warp::any().map({
         let tx = settings_reload_tx.clone();
@@ -526,6 +342,11 @@ async fn main() -> anyhow::Result<()> {
     let settings_reload_rx_filter = warp::any().map({
         let rx = settings_reload_rx.clone();
         move || rx.clone()
+    });
+
+    let env_filter = warp::any().map({
+        let env = env_config.clone();
+        move || env.clone()
     });
 
     let health = warp::path("health").map(|| "ok");
@@ -539,9 +360,14 @@ async fn main() -> anyhow::Result<()> {
         .and(stream_query_filter)
         .and(host_settings_filter.clone())
         .and(settings_reload_rx_filter.clone())
+        .and(env_filter.clone())
         .map(
-            |ws: warp::ws::Ws, query: StreamQuery, settings, reload_rx| {
-                ws.on_upgrade(move |socket| handle_h264_stream(socket, query, settings, reload_rx))
+            |ws: warp::ws::Ws,
+             query: StreamQuery,
+             settings,
+             reload_rx,
+             env| {
+                ws.on_upgrade(move |socket| handle_h264_stream(socket, query, settings, reload_rx, env))
             },
         );
 
@@ -568,15 +394,14 @@ async fn main() -> anyhow::Result<()> {
             .expect("build png response")
     });
 
-    let capabilities_route = warp::path!("api" / "capabilities")
-        .and(warp::get())
-        .map(|| {
-            let caps = HostCapabilities {
-                encoders: detect_available_h264_encoders(),
-                gpus: detect_gpus(),
-            };
-            warp::reply::json(&caps)
-        });
+    let capabilities_route = warp::path!("api" / "capabilities").and(warp::get()).map(|| {
+        let gpus = detect_gpus();
+        let caps = HostCapabilities {
+            encoders: detect_available_h264_encoders(&gpus, false),
+            gpus,
+        };
+        warp::reply::json(&caps)
+    });
 
     let displays_route = warp::path("displays").and(warp::get()).map(|| {
         let displays = input::list_displays().unwrap_or_else(|_| Vec::new());
@@ -603,8 +428,6 @@ async fn main() -> anyhow::Result<()> {
                 let (preferred_width, preferred_height) =
                     canonical_resolution(incoming.preferred_width, incoming.preferred_height);
                 let preferred_preset = canonical_preset(incoming.preferred_preset.clone());
-                // When a named preset is chosen, clear manual overrides so they don't
-                // shadow the preset on the next load.
                 let (eff_width, eff_height, eff_bitrate) = if preferred_preset.is_some() {
                     (None, None, None)
                 } else {
@@ -614,13 +437,19 @@ async fn main() -> anyhow::Result<()> {
                         canonical_bitrate_kbps(incoming.preferred_bitrate_kbps),
                     )
                 };
+                let existing = settings.read().await.clone();
                 let normalized = HostSettings {
                     preferred_encoder: canonical_encoder(incoming.preferred_encoder),
                     preferred_amf_device: incoming.preferred_amf_device,
+                    preferred_nvenc_gpu: incoming.preferred_nvenc_gpu,
                     preferred_preset,
                     preferred_width: eff_width,
                     preferred_height: eff_height,
                     preferred_bitrate_kbps: eff_bitrate,
+                    encoder_probe_cache: incoming
+                        .encoder_probe_cache
+                        .or(existing.encoder_probe_cache),
+                    failed_probe_keys: existing.failed_probe_keys,
                 };
                 {
                     let mut write = settings.write().await;
@@ -637,11 +466,9 @@ async fn main() -> anyhow::Result<()> {
                     let _ = reload_tx.send(next_reload_version);
                     info!(
                         encoder = ?normalized_for_background.preferred_encoder,
+                        nvenc_gpu = ?normalized_for_background.preferred_nvenc_gpu,
                         amf_device = ?normalized_for_background.preferred_amf_device,
                         preset = ?normalized_for_background.preferred_preset,
-                        width = ?normalized_for_background.preferred_width,
-                        height = ?normalized_for_background.preferred_height,
-                        bitrate_kbps = ?normalized_for_background.preferred_bitrate_kbps,
                         "host settings updated via GUI"
                     );
                 });
@@ -649,25 +476,22 @@ async fn main() -> anyhow::Result<()> {
             },
         );
 
-    // Default to 0.0.0.0 so Wi-Fi connections work without setting the env var.
-    // USB-only mode: set FLEXDISPLAY_LISTEN=127.0.0.1 before starting.
-    let listen_host =
-        std::env::var("FLEXDISPLAY_LISTEN").unwrap_or_else(|_| "0.0.0.0".to_string());
-    let listen_ip: std::net::Ipv4Addr =
-        listen_host.parse().unwrap_or(std::net::Ipv4Addr::LOCALHOST);
+    let listen_ip: std::net::Ipv4Addr = env_config
+        .listen_host
+        .parse()
+        .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
+    let listen_port = env_config.port;
 
-    info!(%listen_ip, "host server listening on {}:9001", listen_ip);
+    info!(%listen_ip, port = listen_port, "host server listening");
 
-    // Auto-configure USB tunnel so the Android app works plug-and-play over USB
-    // without the user needing to run adb reverse manually.
     {
         let adb = adb_exe();
         match std::process::Command::new(&adb)
-            .args(["reverse", "tcp:9001", "tcp:9001"])
+            .args(["reverse", &format!("tcp:{listen_port}"), &format!("tcp:{listen_port}")])
             .output()
         {
             Ok(out) if out.status.success() => {
-                info!("adb reverse tcp:9001 tcp:9001 OK — USB mode active");
+                info!(port = listen_port, "adb reverse OK — USB mode active");
             }
             Ok(out) => {
                 let msg = String::from_utf8_lossy(&out.stderr);
@@ -682,7 +506,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let gui_closed_rx = maybe_open_gui(listen_ip);
+    let gui_closed_rx = maybe_open_gui(listen_ip, listen_port);
     let exit_on_gui_close = std::env::var("FLEXDISPLAY_EXIT_ON_GUI_CLOSE")
         .ok()
         .as_deref()
@@ -712,543 +536,17 @@ async fn main() -> anyhow::Result<()> {
     };
 
     warp::serve(routes)
-        .bind_with_graceful_shutdown((listen_ip.octets(), 9001), shutdown_signal)
+        .bind_with_graceful_shutdown((listen_ip.octets(), listen_port), shutdown_signal)
         .1
         .await;
 
     Ok(())
 }
 
-/// Capture backend passed to `stream_with_ffmpeg`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Capture {
-    /// DXGI Desktop Duplication via lavfi/ddagrab — GPU-accelerated, ~1 ms capture latency,
-    /// very low CPU cost.  Requires Windows 8 + WDDM driver (all modern machines).
-    Ddagrab,
-    /// Legacy GDI screen grab — universally compatible, higher CPU utilisation.
-    Gdigrab,
-}
-
-/// Per-encoder low-latency arguments.
-/// Each HW encoder has its own flag vocabulary; wrong flags cause silent startup failures.
-fn encoder_extra_args(encoder: &str) -> Vec<String> {
-    match encoder {
-        "h264_nvenc" => vec![
-            // p1 = fastest NVENC preset (replaces deprecated "ll" in FFmpeg 6+)
-            "-preset".into(),
-            "p1".into(),
-            "-tune".into(),
-            "ll".into(),
-            // cbr: constant bitrate — lowest encode latency; encoder outputs frames immediately
-            // without lookahead buffering (VBR mode adds 50-100 ms of lookahead delay).
-            "-rc".into(),
-            "cbr".into(),
-            // no B-frames: eliminates 2-frame encode delay
-            "-bf".into(),
-            "0".into(),
-            // zerolatency: disables NVENC picture-reorder buffer (hardware lookahead)
-            "-zerolatency".into(),
-            "1".into(),
-            // main profile: NVENC only supports main and high profiles natively.
-            // Specifying "baseline" causes ffmpeg to silently output a stream where the
-            // SPS says baseline but the bitstream uses CABAC (main-level entropy coding),
-            // which is an invalid combination — Android MediaCodec throws EOFException
-            // when it detects the mismatch. "main" with -bf 0 is the correct choice:
-            // no B-frames, CABAC entropy coding, and full NVENC hardware acceleration.
-            // Android CDD requires all devices to support H.264 Main Profile Level 3.1.
-            "-profile:v".into(),
-            "main".into(),
-            // AUD (Access Unit Delimiter): NAL unit type 9 that marks frame boundaries.
-            // The Android H264Decoder flushes access units ONLY on AUD NALs — without
-            // this flag NVENC emits no AUD, frames pile up in the parser and are never
-            // submitted to MediaCodec, producing a black screen and eventual EOFException.
-            // libx264 produces AUD via x264-params aud=1; NVENC needs this explicit flag.
-            "-aud".into(),
-            "1".into(),
-            // Level 5.1: 1920×1080@60fps = ~485k macroblocks/sec which exceeds Level 4.1
-            // (245k limit). Without this, NVENC may write Level 4.1 in the SPS and Qualcomm
-            // decoders enforce that limit, throttling output to ~50fps for complex content.
-            "-level".into(),
-            "5.1".into(),
-        ],
-        "h264_qsv" => vec![
-            "-preset".into(),
-            "veryfast".into(),
-            // async_depth 1: reduce QSV internal pipeline length (fewer frames queued)
-            "-async_depth".into(),
-            "1".into(),
-            "-bf".into(),
-            "0".into(),
-        ],
-        "h264_amf" => vec![
-            // Keep low-latency transport while avoiding motion-analysis spikes that can
-            // show up as microstutter during sustained video playback.
-            "-usage".into(), "lowlatency".into(),
-            "-quality".into(), "balanced".into(),
-            "-latency".into(), "true".into(),
-            "-rc".into(), "cbr".into(),
-            "-async_depth".into(), "1".into(),
-            // baseline: disables CABAC and B-frames — matches NVENC and libx264 for maximum
-            // Android MediaCodec compatibility. High profile at high bitrates can freeze
-            // hardware decoders on mid-range tablets.
-            "-profile".into(), "baseline".into(),
-            "-coder".into(), "cavlc".into(),
-            "-bf".into(), "0".into(),
-            "-max_b_frames".into(), "0".into(),
-            "-vbaq".into(), "true".into(),
-        ],
-        "libx264" => vec![
-            "-preset".into(),
-            "ultrafast".into(),
-            // zerolatency: disables lookahead + sets bf=0 + rc_lookahead=0
-            "-tune".into(),
-            "zerolatency".into(),
-            // Constrained baseline improves compatibility with mobile AVC decoders.
-            "-profile:v".into(),
-            "baseline".into(),
-            // 1600x900@60 can exceed Level 4.1 macroblock rate limits.
-            // Declare 5.1 to avoid decoder-side throttling behavior.
-            "-level".into(),
-            "5.1".into(),
-            // Disable CABAC/B-frames/high refs to avoid pink/green macroblock artifacts.
-            "-x264-params".into(),
-            "bframes=0:scenecut=0:ref=1:cabac=0:rc-lookahead=0:sync-lookahead=0:repeat-headers=1:aud=1:sliced-threads=0".into(),
-        ],
-        _ => vec!["-bf".into(), "0".into()],
-    }
-}
-
-fn amf_device_from_pre_args(pre_args: &[String]) -> Option<u32> {
-    if pre_args.len() < 2 || pre_args[0] != "-init_hw_device" {
-        return None;
-    }
-    let spec = pre_args[1].strip_prefix("d3d11va=amf_dx:")?;
-    spec.parse::<u32>().ok()
-}
-
-async fn handle_h264_stream(
-    socket: warp::ws::WebSocket,
-    query: StreamQuery,
-    settings: Arc<RwLock<HostSettings>>,
-    mut reload_rx: watch::Receiver<u64>,
-) {
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    };
-
-    let (mut ws_tx, mut ws_rx) = socket.split();
-    let _ = *reload_rx.borrow_and_update();
-    let connection_alive = Arc::new(AtomicBool::new(true));
-    let connection_alive_watcher = connection_alive.clone();
-    let restart_requested = Arc::new(AtomicBool::new(false));
-    let restart_requested_watcher = restart_requested.clone();
-
-    let ws_close_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_rx.next().await {
-            if msg.is_close() {
-                break;
-            }
-        }
-        connection_alive_watcher.store(false, Ordering::Relaxed);
-    });
-
-    let reload_watch_task = tokio::spawn(async move {
-        while reload_rx.changed().await.is_ok() {
-            info!("settings changed, requesting active h264 stream restart");
-            restart_requested_watcher.store(true, Ordering::Relaxed);
-        }
-    });
-
-    while connection_alive.load(Ordering::Relaxed) {
-        restart_requested.store(false, Ordering::Relaxed);
-
-        let settings_snapshot = settings.read().await.clone();
-
-        let stream_mode = query
-            .mode
-            .as_deref()
-            .map(|m| m.to_ascii_lowercase())
-            .unwrap_or_else(|| "mirror".to_string());
-
-        // Display index: for "mirror" mode prefer explicit selection.
-        // If not set by client, keep 0 as safe fallback.
-        let default_display_idx = if stream_mode.eq_ignore_ascii_case("extended") {
-            input::default_display_for_mode(&stream_mode).unwrap_or(0)
-        } else {
-            0
-        };
-        let display_idx = query.display.unwrap_or(default_display_idx).clamp(0, 9);
-
-        // Resolve active (width, height, fps, bitrate).
-        // Priority: user-set preset > manual w/h override > host display size (mirror) > client query > defaults.
-        // In mirror mode the host is source-of-truth for geometry so Android only renders.
-        let (preset_w, preset_h, preset_fps, preset_bitrate) =
-            if let Some(ref pname) = settings_snapshot.preferred_preset {
-                if let Some((pw, ph, pfps, pbr)) = resolve_preset(pname) {
-                    (Some(pw), Some(ph), Some(pfps), Some(pbr))
-                } else {
-                    (None, None, None, None)
-                }
-            } else {
-                (None, None, None, None)
-            };
-
-        let (mirror_host_w, mirror_host_h) = if stream_mode.eq_ignore_ascii_case("mirror") {
-            if let Ok(target) = input::resolve_display_target(display_idx) {
-                (
-                    Some(target.width().max(1) as u32),
-                    Some(target.height().max(1) as u32),
-                )
-            } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
-
-        if stream_mode.eq_ignore_ascii_case("mirror") {
-            info!(display_idx, mirror_host_w = ?mirror_host_w, mirror_host_h = ?mirror_host_h, "mirror host display geometry resolved");
-        }
-
-        // Width/height resolution priority: preset > manual > host mirror display > client query > defaults.
-        let rw = preset_w
-            .or(settings_snapshot.preferred_width)
-            .or(mirror_host_w)
-            .or(query.w)
-            .unwrap_or(960);
-        let rh = preset_h
-            .or(settings_snapshot.preferred_height)
-            .or(mirror_host_h)
-            .or(query.h)
-            .unwrap_or(540);
-
-        let out_w = rw.clamp(320, 3840) & !15;
-        let out_h = rh.clamp(240, 2160) & !15;
-        // FPS/bitrate priority: preset > query > defaults.
-        let fps = preset_fps.or(query.fps).unwrap_or(60).clamp(10, 60);
-        let bitrate = preset_bitrate
-            .or(settings_snapshot.preferred_bitrate_kbps)
-            .or(query.bitrate_kbps)
-            .unwrap_or(4000)
-            .clamp(1000, 50000);
-        let preferred = settings_snapshot
-            .preferred_encoder
-            .clone()
-            .or_else(|| query.encoder.clone())
-            .or_else(|| std::env::var("FLEXDISPLAY_HW_ENCODER").ok());
-        let manual_encoder_selected = preferred.is_some();
-
-        let selected_amf_device = settings_snapshot.preferred_amf_device;
-        // Build AMF device fallbacks from detected GPUs instead of hardcoding a single index.
-        // Priority: selected GPU first (if any), then remaining GPUs, then implicit AMF default.
-        let gpu_count = detect_gpus().len().min(10) as u32;
-        let mut amf_device_order: Vec<u32> = Vec::new();
-        if let Some(idx) = selected_amf_device {
-            amf_device_order.push(idx);
-        }
-        for idx in 0..gpu_count {
-            if Some(idx) != selected_amf_device {
-                amf_device_order.push(idx);
-            }
-        }
-        // Prefer the last known-good AMF GPU first, then try the remaining GPUs,
-        // and only then fall back to ffmpeg's implicit default device selection.
-        let mut amf_pre_args_candidates: Vec<Vec<String>> = amf_device_order
-            .into_iter()
-            .map(|idx| vec!["-init_hw_device".into(), format!("d3d11va=amf_dx:{idx}")])
-            .collect();
-        amf_pre_args_candidates.push(vec![]);
-
-        // NVENC GPU fallback order: always start from CUDA device 0, 1, 2, …
-        // then None (let ffmpeg pick automatically).
-        //
-        // IMPORTANT: The NVENC -gpu flag uses CUDA device enumeration, which is
-        // completely independent from WMI/D3D adapter indices. The user's
-        // "preferred GPU" selection (selected_amf_device) is a WMI adapter index
-        // valid for AMF/D3D11va — mapping it directly to -gpu would pick the wrong
-        // CUDA device on most multi-GPU laptops. NVENC always probes from 0.
-        let mut nvenc_gpu_candidates: Vec<Option<u32>> = Vec::new();
-        for idx in 0..gpu_count.max(1) {
-            nvenc_gpu_candidates.push(Some(idx));
-        }
-        nvenc_gpu_candidates.push(None); // implicit fallback (ffmpeg default: any)
-
-        // Build the HW encoder list from what is actually available on this machine
-        // (vendor-filtered at detection time). This avoids attempting NVENC on AMD-only
-        // systems or AMF on NVIDIA-only systems.
-        let available_encoders = detect_available_h264_encoders();
-        let hw: Vec<&str> = ["h264_nvenc", "h264_qsv", "h264_amf"]
-            .iter()
-            .copied()
-            .filter(|e| available_encoders.iter().any(|a| a == e))
-            .collect();
-        // Tuple: (encoder, capture, pre_input_args, nvenc_gpu_override)
-        let mut candidates: Vec<(String, Capture, Vec<String>, Option<u32>)> = Vec::new();
-        // Capture backend priority: mirror mode prefers GDIGRAB (coordinate-based capture)
-        // over DDAGRAB (index-based capture) to avoid cropping issues on non-standard resolutions.
-        // Extended mode can use DDAGRAB (DXGI) since it targets a virtual display.
-        let prefer_capture_env = std::env::var("FLEXDISPLAY_CAPTURE")
-            .ok()
-            .map(|v| v.trim().to_ascii_lowercase());
-        let capture_order: [Capture; 2] = if stream_mode.eq_ignore_ascii_case("mirror") {
-            // Mirror: try GDI (coordinate-based) first for exact monitor capture
-            [Capture::Gdigrab, Capture::Ddagrab]
-        } else if prefer_capture_env.as_deref() == Some("gdigrab") {
-            // Extended with explicit GDI preference
-            [Capture::Gdigrab, Capture::Ddagrab]
-        } else if prefer_capture_env.as_deref() == Some("ddagrab") {
-            // Extended with explicit DXGI preference
-            [Capture::Ddagrab, Capture::Gdigrab]
-        } else {
-            // Extended default: DXGI (GPU-accelerated) first for performance
-            [Capture::Ddagrab, Capture::Gdigrab]
-        };
-
-        if let Some(pref) = preferred.as_deref() {
-            if hw.contains(&pref) {
-                if pref == "h264_amf" {
-                    for cap in capture_order {
-                        for pre in &amf_pre_args_candidates {
-                            candidates.push((pref.into(), cap, pre.clone(), None));
-                        }
-                    }
-                } else if pref == "h264_nvenc" {
-                    for cap in capture_order {
-                        for &gpu in &nvenc_gpu_candidates {
-                            candidates.push((pref.into(), cap, vec![], gpu));
-                        }
-                    }
-                } else {
-                    for cap in capture_order {
-                        candidates.push((pref.into(), cap, vec![], None));
-                    }
-                }
-            } else if pref == "libx264" {
-                for cap in capture_order {
-                    candidates.push((pref.into(), cap, vec![], None));
-                }
-            }
-        }
-
-        if manual_encoder_selected {
-            info!(preferred = ?preferred, "manual encoder requested: priority mode with fallback");
-        }
-
-        {
-            for enc in hw.iter().copied() {
-                if preferred.as_deref() != Some(enc) {
-                    if enc == "h264_amf" {
-                        for cap in capture_order {
-                            for pre in &amf_pre_args_candidates {
-                                candidates.push((enc.into(), cap, pre.clone(), None));
-                            }
-                        }
-                    } else if enc == "h264_nvenc" {
-                        for cap in capture_order {
-                            for &gpu in &nvenc_gpu_candidates {
-                                candidates.push((enc.into(), cap, vec![], gpu));
-                            }
-                        }
-                    } else {
-                        for cap in capture_order {
-                            candidates.push((enc.into(), cap, vec![], None));
-                        }
-                    }
-                }
-            }
-
-            if preferred.as_deref() != Some("libx264") {
-                for cap in capture_order {
-                    candidates.push(("libx264".into(), cap, vec![], None));
-                }
-            }
-        }
-
-        info!(out_w, out_h, fps, bitrate, "h264 stream active profile");
-
-        let mut started = false;
-        for (encoder, capture, pre_args, nvenc_gpu) in &candidates {
-            if !connection_alive.load(Ordering::Relaxed) {
-                break;
-            }
-            if restart_requested.load(Ordering::Relaxed) {
-                break;
-            }
-
-            let profile_msg = format!(
-                "CFG:encoder={};capture={:?};w={};h={};fps={};bitrate_kbps={}",
-                encoder, capture, out_w, out_h, fps, bitrate
-            );
-            let _ = ws_tx.send(Message::text(profile_msg)).await;
-
-            let amf_device = if encoder == "h264_amf" {
-                amf_device_from_pre_args(pre_args)
-            } else {
-                None
-            };
-            info!(encoder = %encoder, capture = ?capture, amf_device = ?amf_device, nvenc_gpu = ?nvenc_gpu, "trying encoder/capture combination");
-
-            match stream_with_ffmpeg(
-                &mut ws_tx,
-                &connection_alive,
-                &restart_requested,
-                FfmpegConfig {
-                    out_w,
-                    out_h,
-                    fps,
-                    bitrate_kbps: bitrate,
-                    mode: stream_mode.clone(),
-                    display_idx,
-                    encoder: encoder.to_string(),
-                    capture: *capture,
-                    pre_input_args: pre_args.clone(),
-                    nvenc_gpu: if encoder == "h264_nvenc" {
-                        *nvenc_gpu
-                    } else {
-                        None
-                    },
-                },
-                if encoder == "h264_amf" {
-                    Some(settings.clone())
-                } else {
-                    None
-                },
-            )
-            .await
-            {
-                Ok(exit) => {
-                    match exit {
-                        StreamExit::Streamed => {
-                            // Auto-learn: if the user had no explicit encoder preference (auto
-                            // mode) and a fallback encoder was used, persist it so subsequent
-                            // connections on this machine start immediately with the right one.
-                            // This makes the app self-configuring when moved between machines
-                            // (AMD laptop ↔ NVIDIA desktop) without any manual GUI changes.
-                            if !manual_encoder_selected {
-                                let current_saved = settings.read().await.preferred_encoder.clone();
-                                if current_saved.as_deref() != Some(encoder.as_str()) {
-                                    let learned = encoder.to_string();
-                                    let learned_gpu = if encoder == "h264_nvenc" {
-                                        *nvenc_gpu
-                                    } else {
-                                        None
-                                    };
-                                    let settings_for_learn = settings.clone();
-                                    tokio::spawn(async move {
-                                        let maybe_updated = {
-                                            let mut w = settings_for_learn.write().await;
-                                            if w.preferred_encoder.is_none() {
-                                                w.preferred_encoder = Some(learned.clone());
-                                                if learned == "h264_nvenc" {
-                                                    // Also store the working CUDA device index in
-                                                    // preferred_amf_device. Not semantically perfect,
-                                                    // but it's persisted and read back for NVENC
-                                                    // ordering on reconnect.
-                                                    w.preferred_amf_device = learned_gpu;
-                                                }
-                                                Some(w.clone())
-                                            } else {
-                                                None
-                                            }
-                                        };
-                                        if let Some(to_save) = maybe_updated {
-                                            let _ = tokio::task::spawn_blocking(move || {
-                                                save_host_settings_to_disk(&to_save);
-                                            })
-                                            .await;
-                                            info!(encoder = %learned, nvenc_gpu = ?learned_gpu, "auto-learned encoder persisted for this machine");
-                                        }
-                                    });
-                                }
-                            }
-                            started = true;
-                            break;
-                        }
-                        StreamExit::RestartRequested => {
-                            started = true;
-                            break;
-                        }
-                        StreamExit::Unavailable => {
-                            // If this was the user-preferred encoder, escalate to WARN so it's
-                            // visible in the console and the user knows why we fell back.
-                            if preferred.as_deref() == Some(encoder.as_str()) {
-                                tracing::warn!(encoder = %encoder, capture = ?capture, amf_device = ?amf_device, "preferred encoder unavailable, trying next candidate");
-                            } else {
-                                info!(encoder = %encoder, capture = ?capture, amf_device = ?amf_device, "not available, trying next");
-                            }
-                        }
-                        StreamExit::SocketClosed => {
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!(encoder = %encoder, "ffmpeg stream error: {e}");
-                    if e.to_string()
-                        .to_ascii_lowercase()
-                        .contains("program not found")
-                    {
-                        let _ = ws_tx
-                            .send(Message::text(
-                                "{\"type\":\"error\",\"message\":\"FFmpeg not found. Install ffmpeg or set FLEXDISPLAY_FFMPEG\"}".to_string(),
-                            ))
-                            .await;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if !connection_alive.load(Ordering::Relaxed) {
-            break;
-        }
-
-        if restart_requested.load(Ordering::Relaxed) {
-            let _ = ws_tx.send(Message::text("RESET")).await;
-            info!(
-                "hot settings apply: closing current h264 stream so client can reconnect cleanly"
-            );
-            break;
-        }
-
-        if !started {
-            let requested = query.encoder.as_deref().unwrap_or("auto");
-            let attempted = candidates
-                .iter()
-                .map(|(enc, cap, _, _)| format!("{enc}/{cap:?}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let msg = if attempted.is_empty() {
-                format!("No H.264 encoder available (requested={requested}, attempted=none)")
-            } else {
-                format!("No H.264 encoder available (requested={requested}, attempted={attempted})")
-            };
-            error!(%msg, "h264 setup failed");
-            let _ = ws_tx
-                .send(Message::text(format!(
-                    "{{\"type\":\"error\",\"message\":\"{}\"}}",
-                    msg
-                )))
-                .await;
-            break;
-        }
-    }
-
-    info!("h264 stream client disconnected");
-    ws_close_task.abort();
-    reload_watch_task.abort();
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StreamExit {
-    Streamed,
-    RestartRequested,
-    Unavailable,
-    SocketClosed,
-}
-
 async fn handle_input_socket(socket: warp::ws::WebSocket, query: InputQuery) {
+    use futures::{SinkExt, StreamExt};
+    use tracing::error;
+
     let (mut ws_tx, mut ws_rx) = socket.split();
     let mode = query.mode.unwrap_or_else(|| "mirror".to_string());
     let default_display_idx = input::default_display_for_mode(&mode).unwrap_or(0);
@@ -1271,15 +569,11 @@ async fn handle_input_socket(socket: warp::ws::WebSocket, query: InputQuery) {
                     Err(_) => continue,
                 };
 
-                // Ping/pong for input RTT measurement.
-                // Client sends {"type":"ping","ts_ms":N}, host echoes {"type":"pong","ts_ms":N}.
-                // This lets the Android HUD display the full input round-trip time so the
-                // user can distinguish "input channel lag" from "video pipeline lag".
                 if let Ok(obj) = serde_json::from_str::<serde_json::Value>(text) {
                     if obj.get("type").and_then(|v| v.as_str()) == Some("ping") {
                         let ts_ms = obj.get("ts_ms").and_then(|v| v.as_i64()).unwrap_or(0);
                         let pong = format!(r#"{{"type":"pong","ts_ms":{ts_ms}}}"#);
-                        let _ = ws_tx.send(Message::text(pong)).await;
+                        let _ = ws_tx.send(warp::ws::Message::text(pong)).await;
                         continue;
                     }
                 }
@@ -1309,520 +603,4 @@ async fn handle_input_socket(socket: warp::ws::WebSocket, query: InputQuery) {
     }
 
     info!("input channel disconnected");
-}
-
-struct FfmpegConfig {
-    out_w: u32,
-    out_h: u32,
-    fps: u32,
-    bitrate_kbps: u32,
-    mode: String,
-    display_idx: u32,
-    encoder: String,
-    capture: Capture,
-    /// Arguments inserted before the first -f/-i input specifier.
-    /// Used to pre-initialise a specific HW device (e.g. for multi-GPU routing).
-    pre_input_args: Vec<String>,
-    /// Explicit NVENC GPU index passed as `-gpu <idx>` to h264_nvenc.
-    /// `None` lets ffmpeg pick the GPU automatically (usually CUDA device 0).
-    nvenc_gpu: Option<u32>,
-}
-
-async fn stream_with_ffmpeg(
-    ws_tx: &mut futures::stream::SplitSink<warp::ws::WebSocket, Message>,
-    connection_alive: &std::sync::Arc<std::sync::atomic::AtomicBool>,
-    restart_requested: &std::sync::Arc<std::sync::atomic::AtomicBool>,
-    config: FfmpegConfig,
-    amf_settings: Option<Arc<RwLock<HostSettings>>>,
-) -> anyhow::Result<StreamExit> {
-    let mut args: Vec<String> = Vec::new();
-
-    // Pre-input args (e.g. "-init_hw_device d3d11va=amf_dx:1") must precede -f/-i.
-    args.extend(config.pre_input_args.iter().cloned());
-
-    // --- Input source ---
-    match config.capture {
-        Capture::Ddagrab => {
-            // DXGI Desktop Duplication: captures directly from GPU framebuffer.
-            // hwdownload copies from GPU VRAM → CPU RAM; format=bgra gives explicit pixel fmt.
-            args.extend([
-                "-f".into(),
-                "lavfi".into(),
-                "-i".into(),
-                format!(
-                    "ddagrab={}:framerate={},hwdownload,format=bgra",
-                    config.display_idx, config.fps
-                ),
-            ]);
-        }
-        Capture::Gdigrab => {
-            // Disable input probing: gdigrab doesn't need it and skipping saves ~500 ms.
-            let maybe_target = input::resolve_display_target(config.display_idx).ok();
-            args.extend([
-                "-probesize".into(),
-                "32".into(),
-                "-analyzeduration".into(),
-                "0".into(),
-                "-f".into(),
-                "gdigrab".into(),
-                "-framerate".into(),
-                config.fps.to_string(),
-            ]);
-            if let Some(target) = maybe_target {
-                args.extend([
-                    "-offset_x".into(),
-                    target.left().to_string(),
-                    "-offset_y".into(),
-                    target.top().to_string(),
-                    "-video_size".into(),
-                    format!("{}x{}", target.width(), target.height()),
-                ]);
-            }
-            args.extend(["-i".into(), "desktop".into()]);
-        }
-    }
-
-    // --- Global low-latency flags ---
-    // nobuffer : disable FFmpeg output buffering between demuxer and encoder
-    // low_delay: propagate low-delay hint through the codec pipeline
-    // fps_mode cfr: enforce constant framerate — duplicate frames if ddagrab delivers
-    //   fewer than `fps` (e.g. 59.94 Hz display gives 59fps with passthrough).
-    //   Frame duplication is imperceptible at 60fps and guarantees the decoder always
-    //   has exactly 60 frames per second to consume.
-    // avioflags direct: bypass the AVIOContext output write-buffer and write encoded
-    //   bytes directly to the pipe fd. Eliminates the avio layer's internal 32 KB buffer
-    //   that can hold up a partial NAL unit before flushing.
-    args.extend([
-        "-fflags".into(),
-        "+nobuffer".into(),
-        "-flags".into(),
-        "+low_delay".into(),
-        "-avioflags".into(),
-        "direct".into(),
-        "-fps_mode".into(),
-        "cfr".into(),
-    ]);
-
-    // --- Video filter ---
-    // No fps filter here: the fps=fps=N filter holds a one-frame FIFO and adds 16ms of
-    // guaranteed latency per-frame. Instead, -r {fps} on the output forces exactly {fps}
-    // timestamps via the cfr muxer without any per-frame buffering in the filtergraph.
-    // format=yuv420p: convert bgr0 (gdigrab) and bgra (ddagrab) to planar YUV.
-    let vf = if config.mode.eq_ignore_ascii_case("mirror") {
-        // Mirror mode: fit-center. Scale down to preserve aspect, then pad to fill with black,
-        // centering the content. After decoding, TextureView applies a transform matrix for final centering.
-        format!(
-            "scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
-            config.out_w, config.out_h, config.out_w, config.out_h
-        )
-    } else {
-        // Extended mode: fill-crop. Scale up to preserve aspect, then center-crop to target resolution.
-        format!(
-            "scale={}:{}:force_original_aspect_ratio=increase,crop={}:{}:(iw-{})/2:(ih-{})/2,format=yuv420p",
-            config.out_w, config.out_h, config.out_w, config.out_h, config.out_w, config.out_h
-        )
-    };
-    args.extend(["-vf".into(), vf, "-an".into()]);
-
-    // Force exactly fps output frames/sec via muxer timestamp assignment (no FIFO).
-    args.extend(["-r".into(), config.fps.to_string()]);
-
-    // --- Encoder + encoder-specific low-latency flags ---
-    args.extend(["-c:v".into(), config.encoder.clone()]);
-    args.extend(encoder_extra_args(&config.encoder));
-
-    // NVENC: explicit GPU device index avoids "no capable devices found" on multi-GPU systems
-    // where ffmpeg might probe the wrong adapter (e.g. iGPU before dGPU).
-    if config.encoder == "h264_nvenc" {
-        if let Some(gpu_idx) = config.nvenc_gpu {
-            args.extend(["-gpu".into(), gpu_idx.to_string()]);
-        }
-    }
-
-    // libx264 on CPU has higher encode cost at very high bitrates; capping bitrate
-    // reduces encode queueing and usually lowers interaction latency on CPU-only hosts.
-    let effective_bitrate_kbps = if config.encoder == "libx264" {
-        config.bitrate_kbps.min(12000)
-    } else if config.encoder == "h264_nvenc" {
-        // Cap NVENC at 8 Mbps for Android compatibility. NVENC hardware CBR output is more
-        // bursty frame-to-frame than libx264 at the same average rate, which can saturate
-        // Android MediaCodec input buffer queues and crash the decoder. 8 Mbps gives
-        // sharp 1080p on a tablet while staying within the decoder's sustained throughput.
-        config.bitrate_kbps.min(8000)
-    } else if config.encoder == "h264_amf" {
-        // AMF shows fewer macroblock artifacts in fast motion with a slightly higher floor.
-        config.bitrate_kbps.max(18000)
-    } else {
-        config.bitrate_kbps
-    };
-
-    // --- Bitrate / GOP ---
-    // GOP = 1 second: avoids large IDR bursts while keeping seek/reconnect latency low.
-    // VBV = bitrate/4: gives the encoder ~2x the per-frame budget for I-frames so they
-    // are never under-constrained (which causes the blocky flicker every GOP interval).
-    // bitrate/8 would save ~1 frame but I-frames become visibly compressed on motion.
-    // AMF benefits from a roomier VBV buffer in 1080p motion scenes; it reduces visible
-    // blockiness and pacing spikes without reintroducing deep buffering.
-    let bufsize = if config.encoder == "h264_amf" {
-        effective_bitrate_kbps / 2
-    } else {
-        effective_bitrate_kbps / 4
-    };
-    // AMF looks smoother in video playback with a 1-second GOP; other encoders keep the
-    // shorter half-second GOP that improves rapid full-scene refresh.
-    let gop = if config.encoder == "h264_amf" {
-        config.fps.clamp(30, 60)
-    } else {
-        (config.fps / 2).clamp(15, 30)
-    };
-    args.extend([
-        "-g".into(),
-        gop.to_string(),
-        "-b:v".into(),
-        format!("{}k", effective_bitrate_kbps),
-        "-maxrate".into(),
-        format!("{}k", effective_bitrate_kbps),
-        "-bufsize".into(),
-        format!("{}k", bufsize),
-        // dump_extra: Repeat the SPS+PPS parameter sets before every IDR frame.
-        // Without this, parameter sets only appear once at stream start. If the decoder
-        // initialises a fraction of a second late (surface not ready, OkHttp delay, etc.)
-        // it misses them and produces a black screen until the next reconnect.
-        "-bsf:v".into(),
-        "dump_extra".into(),
-        "-f".into(),
-        "h264".into(),
-        "-".into(),
-    ]);
-
-    let mut cmd = Command::new(ffmpeg_exe());
-    cmd.args(&args)
-        .kill_on_drop(true)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped());
-
-    // Log full invocation so failures can be reproduced outside the app.
-    info!(
-        encoder = %config.encoder,
-        capture = ?config.capture,
-        nvenc_gpu = ?config.nvenc_gpu,
-        cmd = %format!("ffmpeg {}", args.join(" ")),
-        "ffmpeg invocation"
-    );
-
-    let mut child = cmd.spawn()?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("ffmpeg stdout unavailable"))?;
-
-    // Drain stderr in background so it never blocks the child process.
-    // Lines that look like errors are elevated to WARN so encoder failures are visible
-    // in the console without flooding it with normal ffmpeg statistics.
-    // Every attempt also writes to a timestamped log file so failures can be analyzed
-    // post-mortem even when the console output scrolls past.
-    let enc_name_for_log = config.encoder.clone();
-    let nvenc_gpu_for_log = config.nvenc_gpu;
-    let capture_for_log = config.capture;
-    if let Some(stderr) = child.stderr.take() {
-        let log_path = ffmpeg_log_path(&config.encoder);
-        tokio::spawn(async move {
-            use std::io::Write;
-            use tokio::io::AsyncBufReadExt;
-            // Open log file in blocking context; ignore errors (log is best-effort).
-            let mut log_file: Option<std::fs::File> = tokio::task::block_in_place(|| {
-                if let Some(parent) = log_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&log_path)
-                    .ok()
-            });
-            if let Some(ref mut f) = log_file {
-                let _ = writeln!(
-                    f,
-                    "=== ffmpeg attempt encoder={enc_name_for_log} capture={capture_for_log:?} nvenc_gpu={nvenc_gpu_for_log:?} ==="
-                );
-            }
-            let mut lines = tokio::io::BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let low = line.to_ascii_lowercase();
-                if low.contains("error")
-                    || low.contains("invalid")
-                    || low.contains("could not")
-                    || low.contains("no such")
-                    || low.contains("failed")
-                {
-                    tracing::warn!(encoder = %enc_name_for_log, "ffmpeg: {}", line);
-                } else {
-                    tracing::debug!(target: "ffmpeg", "{}", line);
-                }
-                if let Some(ref mut f) = log_file {
-                    let _ = writeln!(f, "{line}");
-                }
-            }
-        });
-    }
-
-    // 4 KB chunks: at 12 Mbps each 16 KB buffer holds ~11 ms of encoded video before
-    // it's sent. Cutting to 4 KB reduces that to ~2.7 ms — a real latency reduction
-    // without changing any codec or transport parameter.
-    let mut buf = vec![0u8; 4 * 1024];
-    let mut sent_any = false;
-
-    // Timestamp ticker: every 100 ms send a text frame "T:<host_microseconds_utc>".
-    // The Android client computes real end-to-end latency as:
-    //   e2e_ms = android_receive_ms - (host_us / 1000)
-    // Both devices sync to NTP so clocks agree within ~5 ms, making this a useful
-    // display even though it is not a true round-trip measurement.
-    let mut tick = tokio::time::interval(tokio::time::Duration::from_millis(100));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut ticker_announced = false;
-
-    while connection_alive.load(std::sync::atomic::Ordering::Relaxed)
-        && !restart_requested.load(std::sync::atomic::Ordering::Relaxed)
-    {
-        tokio::select! {
-            result = stdout.read(&mut buf) => {
-                let n = result?;
-                if n == 0 {
-                    break; // ffmpeg exited (encoder unavailable or finished)
-                }
-                if !sent_any {
-                    info!(encoder = %config.encoder, "first H.264 bytes sent to client ({n} bytes)");
-                    if config.encoder == "h264_amf" {
-                        let successful_device = amf_device_from_pre_args(&config.pre_input_args);
-                        if let Some(settings) = amf_settings.clone() {
-                            let maybe_updated = {
-                                let mut write = settings.write().await;
-                                if write.preferred_amf_device != successful_device {
-                                    write.preferred_amf_device = successful_device;
-                                    Some(write.clone())
-                                } else {
-                                    None
-                                }
-                            };
-                            if let Some(updated) = maybe_updated {
-                                let to_save = updated.clone();
-                                tokio::spawn(async move {
-                                    let _ = tokio::task::spawn_blocking(move || {
-                                        save_host_settings_to_disk(&to_save);
-                                    })
-                                    .await;
-                                    info!(
-                                        amf_device = ?updated.preferred_amf_device,
-                                        "persisted AMF device from active stream start"
-                                    );
-                                });
-                            }
-                        }
-                    }
-                }
-                sent_any = true;
-                // Timeout: if Android cannot drain the WebSocket within 2 s the decoder
-                // is stalled / OOM. Returning SocketClosed causes the outer loop to kill
-                // ffmpeg and let the client reconnect rather than freezing indefinitely.
-                // Without this timeout, back-pressure fills the OS pipe (64 KB), ffmpeg
-                // blocks on write, and the entire pipeline deadlocks silently.
-                let send_result = tokio::time::timeout(
-                    tokio::time::Duration::from_secs(2),
-                    ws_tx.send(Message::binary(buf[..n].to_vec())),
-                )
-                .await;
-                match send_result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(_)) => return Ok(StreamExit::SocketClosed), // WS error
-                    Err(_elapsed) => {
-                        warn!(encoder = %config.encoder, "WebSocket send stalled >2 s — Android decoder overloaded, restarting stream");
-                        return Ok(StreamExit::SocketClosed);
-                    }
-                }
-            }
-            _ = tick.tick() => {
-                let now_us = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_micros();
-                if !ticker_announced {
-                    info!(encoder = %config.encoder, "e2e ticker active (T: frames every 100ms)");
-                    ticker_announced = true;
-                }
-                // Ignore send errors — client may not be listening for text frames.
-                let _ = ws_tx.send(Message::text(format!("T:{now_us}"))).await;
-            }
-        }
-    }
-
-    let _ = child.kill().await;
-
-    if !connection_alive.load(std::sync::atomic::Ordering::Relaxed) {
-        return Ok(StreamExit::SocketClosed);
-    }
-    if restart_requested.load(std::sync::atomic::Ordering::Relaxed) {
-        return Ok(StreamExit::RestartRequested);
-    }
-    if sent_any {
-        Ok(StreamExit::Streamed)
-    } else {
-        Ok(StreamExit::Unavailable)
-    }
-}
-
-/// Returns a timestamped path for a per-attempt ffmpeg stderr log.
-/// Logs land in `<exe_dir>/logs/ffmpeg-<encoder>-<YYYYMMDD-HHMMSS>.txt`.
-/// Writing there lets users diagnose NVENC failures post-mortem without
-/// needing to capture console output in real time.
-fn ffmpeg_log_path(encoder: &str) -> std::path::PathBuf {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    // Convert epoch to a coarse YYYYMMDD-HHMMSS string without external crates.
-    // Accuracy within ~1 second is sufficient for log file names.
-    let secs_per_day = 86400u64;
-    let secs_per_hour = 3600u64;
-    let secs_per_min = 60u64;
-    // Days since 1970-01-01 (ignoring leap seconds).
-    let days = now / secs_per_day;
-    let rem = now % secs_per_day;
-    let hh = rem / secs_per_hour;
-    let mm = (rem % secs_per_hour) / secs_per_min;
-    let ss = rem % secs_per_min;
-    // Gregorian calendar reconstruction (good until ~2100).
-    let (mut year, mut month, mut day_of_month) = (1970u64, 1u64, 1u64);
-    let mut d = days;
-    loop {
-        let leap = if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) {
-            366
-        } else {
-            365
-        };
-        if d < leap {
-            break;
-        }
-        d -= leap;
-        year += 1;
-    }
-    let leap = if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) {
-        1
-    } else {
-        0
-    };
-    let months = [31u64, 28 + leap, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    for &m in &months {
-        if d < m {
-            break;
-        }
-        d -= m;
-        month += 1;
-    }
-    day_of_month += d;
-    let ts = format!("{year:04}{month:02}{day_of_month:02}-{hh:02}{mm:02}{ss:02}");
-    let safe_enc = encoder.replace([':', '/'], "_");
-    let filename = format!("ffmpeg-{safe_enc}-{ts}.txt");
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            return dir.join("logs").join(filename);
-        }
-    }
-    std::path::PathBuf::from("logs").join(filename)
-}
-
-/// Resolve the path to `ffmpeg(.exe)`.
-///
-/// Search order:
-/// 1. Same directory as the running executable — bundled distribution places
-///    `host-windows.exe` and `ffmpeg.exe` side-by-side.
-/// 2. A `bin/` subdirectory next to the executable.
-/// 3. Fall back to the name `ffmpeg` and let the OS search PATH.
-fn ffmpeg_exe() -> std::path::PathBuf {
-    // Explicit override for portable/custom deployments.
-    if let Ok(custom) = std::env::var("FLEXDISPLAY_FFMPEG") {
-        let p = std::path::PathBuf::from(custom);
-        if p.exists() {
-            return p;
-        }
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        let name = if cfg!(windows) {
-            "ffmpeg.exe"
-        } else {
-            "ffmpeg"
-        };
-        let sibling = exe.with_file_name(name);
-        if sibling.exists() {
-            return sibling;
-        }
-        if let Some(dir) = exe.parent() {
-            // Prefer repository/package-local runtime ffmpeg so behavior is
-            // deterministic across machines and independent from globally
-            // installed WinGet ffmpeg builds.
-            let in_runtime = dir.join(".runtime").join("ffmpeg").join("bin").join(name);
-            if in_runtime.exists() {
-                return in_runtime;
-            }
-            let in_bin = dir.join("bin").join(name);
-            if in_bin.exists() {
-                return in_bin;
-            }
-        }
-    }
-
-    // WinGet (Gyan.FFmpeg) common location on Windows user profiles:
-    // %LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_*\ffmpeg-*\bin\ffmpeg.exe
-    if cfg!(windows) {
-        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            let root = std::path::Path::new(&local_app_data)
-                .join("Microsoft")
-                .join("WinGet")
-                .join("Packages");
-            if let Ok(entries) = std::fs::read_dir(root) {
-                for entry in entries.flatten() {
-                    let package_dir = entry.path();
-                    let Some(name) = package_dir.file_name().and_then(|n| n.to_str()) else {
-                        continue;
-                    };
-                    if !name.starts_with("Gyan.FFmpeg_") {
-                        continue;
-                    }
-                    if let Ok(children) = std::fs::read_dir(&package_dir) {
-                        for child in children.flatten() {
-                            let ffmpeg_bin = child.path().join("bin").join("ffmpeg.exe");
-                            if ffmpeg_bin.exists() {
-                                return ffmpeg_bin;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    std::path::PathBuf::from(if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    })
-}
-
-/// Same bundled-first resolution for `adb(.exe)`.
-pub fn adb_exe() -> std::path::PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        let name = if cfg!(windows) { "adb.exe" } else { "adb" };
-        let sibling = exe.with_file_name(name);
-        if sibling.exists() {
-            return sibling;
-        }
-        if let Some(dir) = exe.parent() {
-            let in_bin = dir.join("bin").join(name);
-            if in_bin.exists() {
-                return in_bin;
-            }
-        }
-    }
-    std::path::PathBuf::from(if cfg!(windows) { "adb.exe" } else { "adb" })
 }

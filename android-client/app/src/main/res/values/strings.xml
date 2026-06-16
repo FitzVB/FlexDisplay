@@ -47,6 +47,7 @@
     <string name="profile_pending">profile: pending</string>
     <string name="profile_waiting_host_cfg">profile: waiting host config</string>
     <string name="profile_active_format">profile: %1$s  •  %2$s  •  %3$sfps  •  %4$s kbps</string>
+    <string name="profile_active_format_extended">profile: %1$s (%2$s)  •  %3$s  •  %4$sfps  •  %5$s kbps</string>
     <string name="profile_changed_log">Profile updated: %1$s</string>
     <string name="resolution_pending">resolution pending  •  %1$d kbps rx</string>
     <string name="logo_content_desc">FlexDisplay logo</string>

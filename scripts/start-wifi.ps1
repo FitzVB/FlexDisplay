@@ -9,23 +9,7 @@ $runtimeEnv = Join-Path $PSScriptRoot "runtime-env.ps1"
 if (Test-Path $runtimeEnv) {
     . $runtimeEnv -RootPath (Split-Path -Parent $PSScriptRoot)
 }
-
-function Resolve-HostExePath {
-    param([string]$Root)
-
-    $candidates = @(
-        (Join-Path $Root "host-windows\target\release\host-windows.exe"),
-        (Join-Path $Root "host-windows.exe")
-    )
-
-    foreach ($candidate in $candidates) {
-        if (Test-Path $candidate) {
-            return $candidate
-        }
-    }
-
-    return $null
-}
+. (Join-Path $PSScriptRoot "lib\Common.ps1")
 
 # IMPORTANT: do not force localhost in Wi-Fi mode
 Remove-Item Env:FLEXDISPLAY_LISTEN -ErrorAction SilentlyContinue
@@ -57,32 +41,18 @@ Write-Host ""
 Write-Host "[*] Starting host on 0.0.0.0:9001 ..." -ForegroundColor Cyan
 
 # Kill any previous instance on port 9001 before starting fresh
-Stop-Process -Name "host-windows" -Force -ErrorAction SilentlyContinue
-$portOwners = Get-NetTCPConnection -LocalPort 9001 -State Listen -ErrorAction SilentlyContinue |
-    Select-Object -ExpandProperty OwningProcess -Unique
-foreach ($ownerPid in $portOwners) {
-    if ($ownerPid -and $ownerPid -ne $PID) {
-        Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
-    }
-}
+Stop-FlexDisplayHost -Port 9001
 
 $root = Split-Path -Parent $PSScriptRoot
 $env:FLEXDISPLAY_FPS = '60'
 
 # Register cleanup: runs when terminal window closes or PowerShell engine exits
 Register-EngineEvent PowerShell.Exiting -Action {
-    Stop-Process -Name 'host-windows' -Force -ErrorAction SilentlyContinue
-    Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like '*--app=*9001*' } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Invoke-FlexDisplayCleanup -Port 9001
 } | Out-Null
 
 function Invoke-Cleanup {
-    Stop-Process -Name 'host-windows' -Force -ErrorAction SilentlyContinue
-    Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like '*--app=*9001*' } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Write-Host '[OK] Cleanup done.' -ForegroundColor Green
+    Invoke-FlexDisplayCleanup -Port 9001
 }
 
 $hostExe = Resolve-HostExePath -Root $root

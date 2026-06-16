@@ -31,7 +31,9 @@ Turn an Android device into a touch-enabled second monitor for Windows over USB 
 
 > **Software fallback:** No GPU hardware encoder required. The host automatically falls back to `libx264` (CPU H.264 encoding) on any machine. Hardware encoding is faster and uses less CPU — it is detected and selected automatically at startup.
 
-> **Encoder auto-learn:** On first successful stream the host saves the working encoder to `host-settings.json`. Subsequent launches on the same machine skip the probe entirely.
+> **Encoder auto-learn:** On first successful stream the host saves the working encoder/capture/GPU combo to `host-settings.json` (next to the running `host-windows.exe`). Subsequent connections try the cached combo first; failed combos are blacklisted for 1.5s probe timeout cycles.
+
+> **Manual encoder lock:** Selecting an encoder in the host GUI (`http://127.0.0.1:9001`) locks that encoder — no automatic HW fallback afterward.
 
 ### Android device (client)
 
@@ -52,10 +54,12 @@ Turn an Android device into a touch-enabled second monitor for Windows over USB 
 
 | Encoder | Hardware required | Bitrate used | Typical latency | Auto-selection order |
 |---------|------------------|--------------|-----------------|----------------------|
-| `h264_nvenc` | NVIDIA GPU (Kepler+, GTX 600 / RTX series) | 8 Mbps | ≤ 5 ms encode | 1st — if NVIDIA GPU detected |
+| `h264_nvenc` | NVIDIA GPU (Kepler+, GTX 600 / RTX series) | 8 Mbps cap | ≤ 5 ms encode | 1st — if NVIDIA GPU detected (WMI) |
 | `h264_qsv` | Intel CPU with Quick Sync (Haswell 4th gen+) | configurable | ≤ 10 ms encode | 2nd — if Intel iGPU detected |
-| `h264_amf` | AMD GPU (GCN 1st gen+, RX 400 series+) | configurable | ≤ 10 ms encode | 3rd — if AMD GPU detected |
-| `libx264` | None — pure CPU | 12 Mbps max | 15–40 ms encode | Always last / guaranteed fallback |
+| `h264_amf` | AMD GPU (GCN 1st gen+, RX 400 series+) | 18 Mbps floor | ≤ 10 ms encode | 3rd — if AMD GPU detected |
+| `libx264` | None — pure CPU | 8 Mbps max* | 15–40 ms encode | Always last / guaranteed fallback |
+
+\* Without a named GUI preset, libx264 auto-downgrades to max 1280×720 @ 30fps. Use preset `cpu_safe` or `ahorro` on weak PCs.
 
 **NVENC technical notes (RTX / GTX):**
 - Uses H.264 **Main Profile** + AUD NAL units for maximum Android MediaCodec compatibility.
@@ -66,7 +70,7 @@ Turn an Android device into a touch-enabled second monitor for Windows over USB 
 - Uses H.264 **Baseline Profile** for broad Android compatibility.
 - CBR low-latency mode with async depth 1.
 
-The host probes each encoder at startup. If the preferred encoder produces zero output for 2+ seconds, the next candidate is tried automatically — **no manual action needed.**
+The host probes each encoder **per WebSocket connection** (not only at process startup). Vendor-aware filtering skips NVENC on AMD-only PCs, AMF on NVIDIA-only PCs, etc. If an encoder produces zero output within **1.5 seconds**, the next candidate is tried automatically — **no manual action needed.**
 
 ---
 

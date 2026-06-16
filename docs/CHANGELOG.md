@@ -5,6 +5,44 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-06-16
+
+### Added
+- **Adaptive stream profile (default)**: Android sends native device resolution + `transport=usb|wifi`; host adapts fps/bitrate and applies encoder-specific caps.
+- **`profile.rs`**: `resolve_base_profile()` + `apply_encoder_profile_caps()` with unit tests.
+
+### Changed
+- **Mirror mode** in adaptive profile: output resolution follows the **tablet**, not the PC monitor (avoids upscaling blur on 1200p devices).
+- **Android**: USB up to 1920×1200@60 / 8 Mbps; Wi-Fi up to 1280×720@30 / 5 Mbps.
+- **AMF bitrate**: clamp 5–18 Mbps (removed 18 Mbps floor on low profiles).
+- Host GUI preset default label: "Automatic (adaptive to device)".
+
+---
+
+## [1.2.0] - 2026-06-16
+
+### Added
+- **Host modular architecture**: `encoder.rs`, `capture.rs`, `ffmpeg.rs`, `settings.rs`, `stream.rs`.
+- **Vendor-aware encoder detection**: NVENC/AMF/QSV filtered by WMI GPU vendor.
+- **Probe timeout (1.5s)**: failed encoders advance quickly instead of hanging.
+- **Encoder probe cache** in `host-settings.json` with failed-combo blacklist.
+- **Manual encoder lock**: GUI-selected encoder skips automatic HW fallback.
+- **libx264 adaptive profile**: auto-caps to 1280×720@30 / 4–8 Mbps without a named preset.
+- **`preferred_nvenc_gpu`** setting separate from AMF adapter index.
+- **`cpu_safe` quality preset** for software encoding.
+- **`scripts/lib/Common.ps1`**, `encoder-smoke-test.ps1`, combined CI workflow.
+- **Env vars wired**: `FLEXDISPLAY_FPS`, `FLEXDISPLAY_BITRATE`, `FLEXDISPLAY_PORT`, `FORCE_SOFTWARE_ENCODER`, capture size hints.
+
+### Changed
+- **Android HUD** shows active encoder + capture backend from `CFG:` frames.
+- **Unified `tryStartCodec`** with 1280×720 compatibility fallback.
+- **health-check.ps1** uses `ffmpeg -encoders` with vendor filtering.
+
+### Fixed
+- Documentation drift around probe timing, settings path, and env configuration.
+
+---
+
 ## [1.1.0] - 2026-04-14
 
 ### Fixed
