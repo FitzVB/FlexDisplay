@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-06-16
+
+### Added
+- Vector `flexdisplay_logo` drawable so Android builds work without the gitignored PNG asset.
+- Release package includes `scripts/lib/Common.ps1` and `encoder-smoke-test.ps1`.
+
+### Changed
+- Version bump to **0.1.5** (host + Android).
+- Android Gradle uses Windows certificate store for SSL on local builds.
+- Release packaging sets `GRADLE_OPTS` for reliable APK builds on Windows.
+
+Includes adaptive streaming profiles (1.3.0): USB/Wi-Fi auto caps, tablet-native resolution, encoder-aware bitrate/fps.
+
+---
+
 ## [1.3.0] - 2026-06-16
 
 ### Added

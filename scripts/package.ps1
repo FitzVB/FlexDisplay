@@ -115,6 +115,12 @@ function Resolve-ApkPath {
 
     if ($BuildAndroid) {
         Write-Step "Building Android APK (debug)"
+        $prevGradleOpts = $env:GRADLE_OPTS
+        if (-not $env:GRADLE_OPTS) {
+            $env:GRADLE_OPTS = "-Djavax.net.ssl.trustStoreType=Windows-ROOT"
+        } elseif ($env:GRADLE_OPTS -notmatch "trustStoreType") {
+            $env:GRADLE_OPTS = "$env:GRADLE_OPTS -Djavax.net.ssl.trustStoreType=Windows-ROOT"
+        }
         Push-Location (Join-Path $RepoRoot "android-client")
         try {
             .\gradlew.bat assembleDebug
@@ -122,6 +128,7 @@ function Resolve-ApkPath {
                 throw "Android build failed"
             }
         } finally {
+            $env:GRADLE_OPTS = $prevGradleOpts
             Pop-Location
         }
     }
@@ -252,6 +259,7 @@ function Copy-RequiredFiles {
         "stop-usb.ps1",
         "install-virtual-display.ps1",
         "remove-virtual-display.ps1",
+        "encoder-smoke-test.ps1",
         "STOP.bat"
     )
 
@@ -260,6 +268,13 @@ function Copy-RequiredFiles {
         if (Test-Path $src) {
             Copy-Item $src (Join-Path $DistRoot "scripts\$file") -Force
         }
+    }
+
+    $commonLib = Join-Path $RepoRoot "scripts\lib\Common.ps1"
+    if (Test-Path $commonLib) {
+        $libDest = Join-Path $DistRoot "scripts\lib"
+        New-Item -ItemType Directory -Force -Path $libDest | Out-Null
+        Copy-Item $commonLib (Join-Path $libDest "Common.ps1") -Force
     }
 
     if (Test-Path (Join-Path $RepoRoot "README.md")) {
