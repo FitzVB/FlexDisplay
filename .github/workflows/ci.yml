@@ -14,8 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release --manifest-path host-windows/Cargo.toml
+        with:
+          components: rustfmt, clippy
       - run: cargo fmt --check --manifest-path host-windows/Cargo.toml
+      - run: cargo clippy --manifest-path host-windows/Cargo.toml -- -D warnings
+      - run: cargo test --manifest-path host-windows/Cargo.toml
+      - run: cargo build --release --manifest-path host-windows/Cargo.toml
 
   android-client:
     name: Android Client
@@ -26,6 +30,9 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: gradle
       - uses: android-actions/setup-android@v3
-      - run: ./gradlew.bat assembleDebug
+      - run: chmod +x gradlew
+        working-directory: android-client
+      - run: ./gradlew assembleDebug --no-daemon
         working-directory: android-client

@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-06-16
+
+### Fixed
+- **CI Android job**: use `./gradlew` on Ubuntu (was `gradlew.bat`, which only works on Windows).
+- **CI Rust job**: added `clippy` and `cargo test` steps; install `rustfmt` + `clippy` components.
+- **Clippy**: simplified `capture_order`, removed unnecessary `unwrap` in profile resolution, collapsed nested `if` in settings migration.
+- **rustfmt**: formatted host crate sources.
+
+---
+
 ## [0.1.5] - 2026-06-16
 
 ### Added
