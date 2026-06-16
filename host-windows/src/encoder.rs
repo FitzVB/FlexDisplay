@@ -251,17 +251,12 @@ pub fn build_encoder_candidates(opts: &CandidateBuildOptions<'_>) -> Vec<Encoder
         || hw.is_empty();
 
     let preferred = opts.preferred_encoder;
-    let capture_order_for = |enc: Option<&str>| {
-        crate::capture::capture_order(opts.stream_mode, opts.capture_env, enc)
-    };
+    let capture_order_for =
+        |enc: Option<&str>| crate::capture::capture_order(opts.stream_mode, opts.capture_env, enc);
 
     let mut candidates: Vec<EncoderCandidate> = Vec::new();
-    let failed: std::collections::HashSet<String> = opts
-        .settings
-        .failed_probe_keys
-        .iter()
-        .cloned()
-        .collect();
+    let failed: std::collections::HashSet<String> =
+        opts.settings.failed_probe_keys.iter().cloned().collect();
 
     let filter_failed = |list: Vec<EncoderCandidate>| -> Vec<EncoderCandidate> {
         list.into_iter()

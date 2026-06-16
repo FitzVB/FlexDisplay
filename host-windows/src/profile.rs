@@ -87,10 +87,7 @@ pub fn resolve_base_profile(req: &BaseProfileRequest) -> StreamProfile {
         let w = align_dim(req.preset_w.unwrap_or(1280), 320, 3840);
         let h = align_dim(req.preset_h.unwrap_or(720), 240, 2160);
         let fps = req.preset_fps.unwrap_or(60).clamp(10, 60);
-        let bitrate = req
-            .preset_bitrate
-            .unwrap_or(10_000)
-            .clamp(1000, 50_000);
+        let bitrate = req.preset_bitrate.unwrap_or(10_000).clamp(1000, 50_000);
         return StreamProfile {
             w,
             h,
@@ -102,29 +99,23 @@ pub fn resolve_base_profile(req: &BaseProfileRequest) -> StreamProfile {
     let client_w = req.client_w.filter(|&v| v >= 320);
     let client_h = req.client_h.filter(|&v| v >= 240);
 
-    let (mut w, mut h) = if req.adaptive && client_w.is_some() && client_h.is_some() {
-        // Adaptive: device-native request wins over host monitor geometry (mirror + extended).
-        (
-            align_dim(client_w.unwrap(), 320, 3840),
-            align_dim(client_h.unwrap(), 240, 2160),
-        )
-    } else {
-        let rw = req
-            .manual_w
-            .or(req.env_w)
-            .or(req.mirror_host_w)
-            .or(client_w)
-            .unwrap_or(960);
-        let rh = req
-            .manual_h
-            .or(req.env_h)
-            .or(req.mirror_host_h)
-            .or(client_h)
-            .unwrap_or(540);
-        (
-            align_dim(rw, 320, 3840),
-            align_dim(rh, 240, 2160),
-        )
+    let (mut w, mut h) = match (req.adaptive, client_w, client_h) {
+        (true, Some(cw), Some(ch)) => (align_dim(cw, 320, 3840), align_dim(ch, 240, 2160)),
+        _ => {
+            let rw = req
+                .manual_w
+                .or(req.env_w)
+                .or(req.mirror_host_w)
+                .or(client_w)
+                .unwrap_or(960);
+            let rh = req
+                .manual_h
+                .or(req.env_h)
+                .or(req.mirror_host_h)
+                .or(client_h)
+                .unwrap_or(540);
+            (align_dim(rw, 320, 3840), align_dim(rh, 240, 2160))
+        }
     };
 
     // Soft cap by transport before encoder pass (Android already scales; host double-checks).

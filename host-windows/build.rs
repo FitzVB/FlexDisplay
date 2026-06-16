@@ -1,7 +1,10 @@
 fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winres::WindowsResource::new();
-        res.set("FileDescription", "FlexDisplay Host — Android second monitor");
+        res.set(
+            "FileDescription",
+            "FlexDisplay Host — Android second monitor",
+        );
         res.set("ProductName", "FlexDisplay");
         res.set("CompanyName", "FlexDisplay");
         res.set("LegalCopyright", "Copyright (C) 2025 FlexDisplay");

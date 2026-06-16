@@ -36,15 +36,11 @@ struct HostCapabilities {
 
 fn logo_png_bytes() -> &'static [u8] {
     &[
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-        0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41,
-        0x54, 0x78, 0x9C, 0x62, 0x00, 0x00, 0x00, 0x02,
-        0x00, 0x01, 0xE5, 0x27, 0xDE, 0xFC, 0x00, 0x00,
-        0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42,
-        0x60, 0x82,
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x62, 0x00,
+        0x00, 0x00, 0x02, 0x00, 0x01, 0xE5, 0x27, 0xDE, 0xFC, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+        0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ]
 }
 
@@ -263,7 +259,10 @@ loadAll();
 </html>"#
 }
 
-fn maybe_open_gui(listen_ip: std::net::Ipv4Addr, port: u16) -> Option<std::sync::mpsc::Receiver<()>> {
+fn maybe_open_gui(
+    listen_ip: std::net::Ipv4Addr,
+    port: u16,
+) -> Option<std::sync::mpsc::Receiver<()>> {
     if std::env::var("FLEXDISPLAY_DISABLE_AUTO_GUI")
         .ok()
         .as_deref()
@@ -362,12 +361,10 @@ async fn main() -> anyhow::Result<()> {
         .and(settings_reload_rx_filter.clone())
         .and(env_filter.clone())
         .map(
-            |ws: warp::ws::Ws,
-             query: StreamQuery,
-             settings,
-             reload_rx,
-             env| {
-                ws.on_upgrade(move |socket| handle_h264_stream(socket, query, settings, reload_rx, env))
+            |ws: warp::ws::Ws, query: StreamQuery, settings, reload_rx, env| {
+                ws.on_upgrade(move |socket| {
+                    handle_h264_stream(socket, query, settings, reload_rx, env)
+                })
             },
         );
 
@@ -394,14 +391,16 @@ async fn main() -> anyhow::Result<()> {
             .expect("build png response")
     });
 
-    let capabilities_route = warp::path!("api" / "capabilities").and(warp::get()).map(|| {
-        let gpus = detect_gpus();
-        let caps = HostCapabilities {
-            encoders: detect_available_h264_encoders(&gpus, false),
-            gpus,
-        };
-        warp::reply::json(&caps)
-    });
+    let capabilities_route = warp::path!("api" / "capabilities")
+        .and(warp::get())
+        .map(|| {
+            let gpus = detect_gpus();
+            let caps = HostCapabilities {
+                encoders: detect_available_h264_encoders(&gpus, false),
+                gpus,
+            };
+            warp::reply::json(&caps)
+        });
 
     let displays_route = warp::path("displays").and(warp::get()).map(|| {
         let displays = input::list_displays().unwrap_or_else(|_| Vec::new());
@@ -487,7 +486,11 @@ async fn main() -> anyhow::Result<()> {
     {
         let adb = adb_exe();
         match std::process::Command::new(&adb)
-            .args(["reverse", &format!("tcp:{listen_port}"), &format!("tcp:{listen_port}")])
+            .args([
+                "reverse",
+                &format!("tcp:{listen_port}"),
+                &format!("tcp:{listen_port}"),
+            ])
             .output()
         {
             Ok(out) if out.status.success() => {

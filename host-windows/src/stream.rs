@@ -7,7 +7,9 @@ use crate::profile::{
     apply_encoder_profile_caps, resolve_base_profile, BaseProfileRequest, StreamProfile,
     TransportKind,
 };
-use crate::settings::{canonical_encoder, resolve_preset, save_host_settings_to_disk, HostSettings};
+use crate::settings::{
+    canonical_encoder, resolve_preset, save_host_settings_to_disk, HostSettings,
+};
 use futures::{SinkExt, StreamExt};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -64,8 +66,7 @@ pub async fn handle_h264_stream(
     });
 
     let gpus = detect_gpus();
-    let available_encoders =
-        detect_available_h264_encoders(&gpus, env.force_software_encoder);
+    let available_encoders = detect_available_h264_encoders(&gpus, env.force_software_encoder);
 
     while connection_alive.load(Ordering::Relaxed) {
         restart_requested.store(false, Ordering::Relaxed);
@@ -242,8 +243,7 @@ pub async fn handle_h264_stream(
                 bitrate_kbps: bitrate,
             };
             let eff = apply_encoder_profile_caps(&candidate.encoder, transport, base);
-            let (eff_w, eff_h, eff_fps, eff_bitrate) =
-                (eff.w, eff.h, eff.fps, eff.bitrate_kbps);
+            let (eff_w, eff_h, eff_fps, eff_bitrate) = (eff.w, eff.h, eff.fps, eff.bitrate_kbps);
 
             let profile_msg = format!(
                 "CFG:encoder={};capture={};w={};h={};fps={};bitrate_kbps={};profile={};transport={}",
@@ -421,7 +421,9 @@ pub async fn handle_h264_stream(
 
         if restart_requested.load(Ordering::Relaxed) {
             let _ = ws_tx.send(Message::text("RESET")).await;
-            info!("hot settings apply: closing current h264 stream so client can reconnect cleanly");
+            info!(
+                "hot settings apply: closing current h264 stream so client can reconnect cleanly"
+            );
             break;
         }
 

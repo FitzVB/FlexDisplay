@@ -45,10 +45,6 @@ pub fn capture_order(
         }
     } else if prefer_capture_env == Some("gdigrab") {
         [Capture::Gdigrab, Capture::Ddagrab]
-    } else if prefer_capture_env == Some("ddagrab") {
-        [Capture::Ddagrab, Capture::Gdigrab]
-    } else if software {
-        [Capture::Ddagrab, Capture::Gdigrab]
     } else {
         [Capture::Ddagrab, Capture::Gdigrab]
     }

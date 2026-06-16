@@ -150,10 +150,10 @@ pub fn load_host_settings_from_disk() -> HostSettings {
     };
     let mut settings: HostSettings = serde_json::from_str(&text).unwrap_or_default();
     // Legacy migration: NVENC CUDA index was stored in preferred_amf_device.
-    if settings.preferred_nvenc_gpu.is_none() {
-        if settings.preferred_encoder.as_deref() == Some("h264_nvenc") {
-            settings.preferred_nvenc_gpu = settings.preferred_amf_device;
-        }
+    if settings.preferred_nvenc_gpu.is_none()
+        && settings.preferred_encoder.as_deref() == Some("h264_nvenc")
+    {
+        settings.preferred_nvenc_gpu = settings.preferred_amf_device;
     }
     settings
 }
