@@ -2,8 +2,10 @@
 setlocal EnableDelayedExpansion
 title FlexDisplay
 
-:: Unified launcher - delegates to PowerShell script for better modularity
-:: This wrapper ensures cross-platform compatibility and consistent behavior
+echo.
+echo  FlexDisplay - double-click START to connect your tablet.
+echo  First run downloads ADB and FFmpeg automatically.
+echo.
 
 set "LAUNCHER=%~dp0scripts\launcher.ps1"
 

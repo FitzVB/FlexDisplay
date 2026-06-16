@@ -103,7 +103,7 @@ Para el modo **Extended** necesitas tener instalado el VDD (Paso 3).
 Cierra la ventana negra (terminal) que se abrió al ejecutar `START.bat`.
 El programa se cerrará automáticamente y limpiará todos los procesos en segundo plano.
 
-También puedes hacer doble clic en **`STOP.bat`** (dentro de la carpeta `scripts`) para detenerlo sin cerrar la terminal.
+También puedes hacer doble clic en **`STOP.bat`** (junto a `START.bat`) para detenerlo sin cerrar la terminal.
 
 ---
 
@@ -128,7 +128,9 @@ También puedes hacer doble clic en **`STOP.bat`** (dentro de la carpeta `script
 - En modo Wi-Fi, acerca el dispositivo al router.
 
 ### Windows bloqueó el script `.ps1`
-Usa **`START_SAFE.bat`** en lugar de `START.bat`. Este modo evita los scripts de PowerShell.
+### Windows bloqueó el script `.ps1`
+Clic derecho en **START.bat** → **Ejecutar como administrador**, o en PowerShell como admin:
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
 
 ---
 

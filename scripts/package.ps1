@@ -39,6 +39,11 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+# Default: do not bundle ADB/FFmpeg (smaller ZIP, fewer AV false positives).
+if (-not $PSBoundParameters.ContainsKey('SkipBundledRuntime')) {
+    $SkipBundledRuntime = $true
+}
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $CacheDir) {
     $CacheDir = Join-Path $RepoRoot ".cache"
@@ -243,12 +248,7 @@ function Copy-RequiredFiles {
     }
 
     Copy-Item (Join-Path $RepoRoot "START.bat") (Join-Path $DistRoot "START.bat") -Force
-    foreach ($safeBat in @("START_SAFE.bat", "USB_SAFE.bat", "WIFI_SAFE.bat")) {
-        $safeSrc = Join-Path $RepoRoot $safeBat
-        if (Test-Path $safeSrc) {
-            Copy-Item $safeSrc (Join-Path $DistRoot $safeBat) -Force
-        }
-    }
+    Copy-Item (Join-Path $RepoRoot "STOP.bat") (Join-Path $DistRoot "STOP.bat") -Force
 
     $scriptFiles = @(
         "launcher.ps1",
@@ -256,11 +256,7 @@ function Copy-RequiredFiles {
         "runtime-env.ps1",
         "start-usb.ps1",
         "start-wifi.ps1",
-        "stop-usb.ps1",
-        "install-virtual-display.ps1",
-        "remove-virtual-display.ps1",
-        "encoder-smoke-test.ps1",
-        "STOP.bat"
+        "stop-usb.ps1"
     )
 
     foreach ($file in $scriptFiles) {
@@ -291,20 +287,17 @@ function Copy-RequiredFiles {
 FlexDisplay - Quick Start
 
 1. Double-click START.bat
-2. Select USB or Wi-Fi mode
-3. In USB mode the app is auto-installed when an Android device is connected
-
-First run:
-  ADB and FFmpeg are downloaded automatically from official sources on first launch.
-  An internet connection is required the first time only.
+2. On first run, ADB and FFmpeg download automatically (internet required once)
+3. Select USB or Wi-Fi mode
+4. In USB mode the app is auto-installed when an Android device is connected
+5. To stop: close the host window or double-click STOP.bat
 
 Extended display (optional):
-  If you want to use your Android device as an extra monitor (not just a mirror),
-  you need to install the Virtual Display Driver first:
+  Install the Virtual Display Driver from:
   https://github.com/VirtualDrivers/Virtual-Display-Driver/releases
-  Download the .exe installer, run it, click Install, then reboot once.
+  Then reboot once.
 
-For the full manual: see README.md or https://github.com/FitzVB/tablet-second-monitor
+For the full manual: see README.md or QUICK-START.md
 "@
     Set-Content -Path (Join-Path $DistRoot "QUICK_START.txt") -Value $quick -Encoding UTF8
 
@@ -338,9 +331,9 @@ if (Test-Path $zipPath) {
 
 $hostExe = Build-HostRelease
 $apkPath = Resolve-ApkPath
-if (-not $SkipBundledRuntime) {
-    Write-Step "Skipping bundled runtime by default (will download on first run)"
-    Write-Host "    Pass -SkipBundledRuntime:$false to bundle ADB + FFmpeg inside the ZIP." -ForegroundColor Gray
+if ($SkipBundledRuntime) {
+    Write-Step "Skipping bundled runtime (ADB + FFmpeg download on first run)"
+    Write-Host "    Pass -BundleRuntime to scripts/release.ps1 to embed runtime in the ZIP." -ForegroundColor Gray
 } else {
     Prepare-MinRuntime -DistRoot $distRoot
 }

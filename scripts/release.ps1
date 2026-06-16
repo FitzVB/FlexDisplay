@@ -46,9 +46,8 @@ if ((-not $SkipAndroid) -and (-not $NoBuildAndroid)) {
     # Default behavior for simple releases: always include a fresh debug APK.
     $packageArgs.BuildAndroid = $true
 }
-if (-not $BundleRuntime) {
-    # Default behavior to reduce AV false positives in zipped artifacts.
-    $packageArgs.SkipBundledRuntime = $true
+if ($BundleRuntime) {
+    $packageArgs.SkipBundledRuntime = $false
 }
 
 Write-Host ""

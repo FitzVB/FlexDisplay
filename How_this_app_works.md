@@ -19,7 +19,7 @@ Core design principles in current stable state:
 - `scripts/launcher.ps1`: asks user for USB or Wi-Fi and dispatches startup.
 - `scripts/start-usb.ps1`: configures ADB reverse and starts host.
 - `scripts/start-wifi.ps1`: starts host on LAN and prints likely host IP.
-- `scripts/STOP.bat` + `scripts/stop-usb.ps1`: stop host and clean ADB reverse.
+- `STOP.bat` + `scripts/stop-usb.ps1`: stop host and clean ADB reverse.
 - `host-windows/`: Rust backend (capture, encode, websocket server, host GUI).
 - `android-client/`: Android app (UI, stream decode, touch input, reconnect logic).
 - `docs/SETUP.md`: toolchain/environment setup.

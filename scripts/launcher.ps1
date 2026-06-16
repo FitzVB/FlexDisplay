@@ -9,7 +9,6 @@ Write-Host ""
 $root = Split-Path -Parent $PSScriptRoot
 $usbScript = Join-Path $PSScriptRoot "start-usb.ps1"
 $wifiScript = Join-Path $PSScriptRoot "start-wifi.ps1"
-$installVddScript = Join-Path $PSScriptRoot "install-virtual-display.ps1"
 $ensureRuntimeScript = Join-Path $PSScriptRoot "ensure-runtime.ps1"
 
 function Test-VirtualDisplayDriverInstalled {
@@ -51,17 +50,22 @@ if (Test-VirtualDisplayDriverInstalled) {
 else {
     Write-Host '[WARN] Virtual display driver not found.' -ForegroundColor Yellow
     Write-Host '       Extended mode will not be available.' -ForegroundColor Yellow
-    Write-Host '       To install manually run:  .\scripts\install-virtual-display.ps1' -ForegroundColor DarkYellow
+    Write-Host '       Extended mode: install Virtual Display Driver from GitHub (see QUICK-START.md).' -ForegroundColor DarkYellow
 }
 
 if (Test-Path $ensureRuntimeScript) {
-    Write-Host "[*] Checking local runtime (ADB/FFmpeg)..." -ForegroundColor Cyan
+    Write-Host "[*] Preparing runtime (ADB + FFmpeg)..." -ForegroundColor Cyan
+    Write-Host "    First run downloads tools from official sources (~110 MB, one time)." -ForegroundColor DarkGray
     try {
         & $ensureRuntimeScript -RootPath $root -EnsureAdb -EnsureFfmpeg
+        Write-Host "[OK] Runtime ready" -ForegroundColor Green
     }
     catch {
-        Write-Host "[WARN] Runtime bootstrap failed: $($_.Exception.Message)" -ForegroundColor Yellow
-        Write-Host "       START can continue, but USB/Wi-Fi may fail without dependencies." -ForegroundColor Yellow
+        Write-Host "[WARN] Runtime download failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "       Check your internet connection and run START.bat again." -ForegroundColor Yellow
+        Write-Host "       USB/Wi-Fi mode needs ADB and FFmpeg in .runtime\" -ForegroundColor Yellow
+        $cont = Read-Host "Continue anyway? [y/N]"
+        if ($cont -notmatch '^[yY]') { exit 1 }
     }
 }
 

@@ -105,7 +105,7 @@ Inside the FlexDisplay app on the Android device you will see two options:
 Close the black window (terminal) that opened when you ran `START.bat`.
 The program will stop automatically and clean up all background processes.
 
-You can also double-click **`STOP.bat`** (inside the `scripts` folder) to stop it without closing the terminal.
+You can also double-click **`STOP.bat`** (next to `START.bat`) to stop without closing the terminal.
 
 ---
 
@@ -130,7 +130,8 @@ You can also double-click **`STOP.bat`** (inside the `scripts` folder) to stop i
 - In Wi-Fi mode, move the device closer to the router.
 
 ### Windows blocked the `.ps1` script
-Use **`START_SAFE.bat`** instead of `START.bat`. This mode avoids PowerShell scripts.
+Right-click **START.bat** → **Run as administrator**, or open PowerShell as admin and run:
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
 
 ---
 

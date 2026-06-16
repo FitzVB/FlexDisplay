@@ -7,7 +7,7 @@ Complete installation and configuration guide for this project.
 For daily use, avoid running the host manually unless you are debugging.
 
 - Start: `START.bat`
-- Stop and clean USB tunnel: `scripts\STOP.bat`
+- Stop and clean USB tunnel: `STOP.bat`
 - USB is the recommended mode.
 
 ---

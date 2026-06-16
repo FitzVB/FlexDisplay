@@ -190,14 +190,10 @@ async function loadAll(){
     const preset = document.getElementById('preset');
     preset.innerHTML = '';
     presetDefs = [
-        { value: '',           label: 'Automatic (adaptive to device)', detail: 'Matches tablet native resolution (USB up to 1920×1200@60, Wi-Fi up to 1280×720@30). Encoder caps apply automatically.' },
-        { value: 'cpu_safe',    label: 'CPU safe - 960x544 / 30fps / 5 Mbps', detail: 'Optimized for libx264 software encoding on weak PCs.' },
-        { value: 'ahorro',      label: 'Power saver - 960x544 / 30fps / 5 Mbps', detail: 'Low bandwidth and battery impact for remote control tasks.' },
-        { value: 'equilibrado', label: 'Balanced - 1280x720 / 60fps / 10 Mbps', detail: 'Default smooth profile for most Android devices.' },
-        { value: 'alta_720p',   label: 'High quality 720p - 1280x720 / 60fps / 15 Mbps', detail: 'Sharper image while preserving 60fps responsiveness.' },
-        { value: 'fluido_900p', label: 'Smooth 900p - 1600x900 / 60fps / 20 Mbps', detail: 'Higher detail profile for stronger GPUs and USB links.' },
-        { value: 'full_hd',     label: 'Full HD office - 1920x1080 / 60fps / 25 Mbps', detail: '1080p profile optimized for productivity and text clarity.' },
-        { value: 'full_hd_max', label: 'Full HD detail - 1920x1080 / 60fps / 35 Mbps', detail: 'Maximum detail profile. Requires stable encoder and fast link.' },
+        { value: '',            label: 'Automatic (recommended)', detail: 'Adapts to tablet and link: USB up to 1920×1200@60, Wi-Fi up to 1280×720@30. Encoder caps apply automatically.' },
+        { value: 'cpu_safe',    label: 'Low — 960×544 / 30 fps / 5 Mbps', detail: 'For weak PCs or software encoding (e.g. libx264, RX 550). Lower CPU and bandwidth use.' },
+        { value: 'equilibrado', label: 'Balanced — 1280×720 / 60 fps / 10 Mbps', detail: 'Fixed 720p profile when you want more control than automatic mode.' },
+        { value: 'full_hd',     label: 'High — 1920×1080 / 60 fps / 25 Mbps', detail: 'Fixed 1080p for strong GPUs and USB. Requires a capable hardware encoder.' },
     ];
     presetDefs.forEach(p => { const o=document.createElement('option'); o.value=p.value; o.textContent=p.label; preset.appendChild(o); });
     preset.value = set.preferred_preset || '';

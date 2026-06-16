@@ -1,8 +1,8 @@
 @echo off
 setlocal
-title FlexDisplay - First Run Setup
+title FlexDisplay - Developer Setup
 
-set "BOOTSTRAP=%~dp0scripts\first-run.ps1"
+set "BOOTSTRAP=%~dp0first-run.ps1"
 
 if not exist "%BOOTSTRAP%" (
     echo [ERROR] scripts\first-run.ps1 not found

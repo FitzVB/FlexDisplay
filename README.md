@@ -78,14 +78,14 @@ The host probes each encoder **per WebSocket connection** (not only at process s
 
 - Touch input on extended monitor: fixed.
 - Android UI with menu, HUD, and FAQ: updated.
-- Single startup launcher: `START.bat`.
-- Stop utility: `scripts\STOP.bat`.
+- Single startup launcher: `START.bat` (downloads ADB/FFmpeg on first run).
+- Stop utility: `STOP.bat`.
 
 ## Single structure (source of truth)
 
-- `START.bat`: main startup entry point.
-- `scripts\STOP.bat`: stops host and clears `adb reverse`.
-- `scripts\launcher.ps1`: launcher logic (USB/Wi-Fi).
+- `START.bat`: main startup entry point (end users only need this + `STOP.bat`).
+- `STOP.bat`: stops host and clears `adb reverse`.
+- `scripts\launcher.ps1`: internal launcher (USB/Wi-Fi); not meant for direct use.
 - `docs\SETUP.md`: environment setup.
 - `host-windows\`: Rust host server.
 - `android-client\`: Android app.
@@ -134,15 +134,15 @@ Package characteristics:
 
 Target size for end-user package:
 
-- Typical ZIP target: ~250MB to 450MB
-- Exact size depends mainly on FFmpeg build and APK size
+- Typical ZIP target: ~5–10 MB (host + APK + scripts; no embedded FFmpeg/ADB)
+- First run downloads ~110 MB of tools into `.runtime\` (one time)
 
-### New PC (first-time setup in one click)
+### Developer setup (new PC / from source)
 
-If this is a new Windows PC with no dependencies installed yet, run:
+If you are building from source on a clean Windows PC:
 
 ```bat
-SETUP_AND_START.bat
+scripts\SETUP_DEV.bat
 ```
 
 What it does automatically:
@@ -176,18 +176,15 @@ Notes:
    - Start host server
 4. If needed, tap `Connect` in the Android app.
 
-### Antivirus fallback (no PowerShell)
+### PowerShell blocked by policy
 
-If your antivirus blocks `.ps1` scripts, use the safe batch-only path:
+If Windows blocks `.ps1` scripts, run once in PowerShell (as your user):
 
-1. Run `START_SAFE.bat`.
-2. For USB setup help (no PowerShell), run `USB_SAFE.bat`.
-3. For Wi-Fi IP guidance (no PowerShell), run `WIFI_SAFE.bat`.
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
 
-Notes:
-
-- `START_SAFE.bat` starts the host without invoking PowerShell.
-- In USB mode you may still need to run ADB commands manually.
+Then run `START.bat` again.
 
 ### Recommended USB mode
 
@@ -299,7 +296,7 @@ Use one of these options:
 To stop everything and clean the USB tunnel:
 
 ```bat
-scripts\STOP.bat
+STOP.bat
 ```
 
 ## In-app FAQ
@@ -318,7 +315,7 @@ It is **close**, but still not 100% zero-friction.
 ### Already solved
 
 - Single startup file (`START.bat`).
-- Single stop file (`scripts\STOP.bat`).
+- Single stop file (`STOP.bat`).
 - Stable USB workflow for daily use.
 
 ### Still requires minimal technical steps

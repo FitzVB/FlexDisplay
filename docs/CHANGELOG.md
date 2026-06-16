@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-06-16
+
+### Changed
+- **Simpler end-user UX**: only `START.bat` and `STOP.bat` at package root; removed `START_SAFE`, `USB_SAFE`, `WIFI_SAFE`.
+- **Runtime on first start**: `START.bat` downloads ADB/FFmpeg via `ensure-runtime.ps1`; release ZIP no longer embeds `.runtime/` by default (~5 MB vs ~46 MB).
+- **Quality presets**: GUI reduced to Automatic / Low / Balanced / High (legacy preset names still load from settings).
+- Developer bootstrap moved to `scripts/SETUP_DEV.bat`.
+
+### Fixed
+- **package.ps1**: inverted `SkipBundledRuntime` logic corrected; bundling requires `-BundleRuntime` explicitly.
+
+---
+
 ## [0.1.6] - 2026-06-16
 
 ### Fixed

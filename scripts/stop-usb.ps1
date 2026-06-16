@@ -2,8 +2,15 @@ $ErrorActionPreference = "SilentlyContinue"
 
 $root = Split-Path -Parent $PSScriptRoot
 
+$runtimeEnv = Join-Path $PSScriptRoot "runtime-env.ps1"
+if (Test-Path $runtimeEnv) {
+    . $runtimeEnv -RootPath $root
+}
+
 function Resolve-AdbPath {
     param([string]$Root)
+    $runtimeAdb = Join-Path $Root ".runtime\adb\platform-tools\adb.exe"
+    if (Test-Path $runtimeAdb) { return $runtimeAdb }
     $bundled = Join-Path $Root "adb.exe"
     if (Test-Path $bundled) { return $bundled }
     $sdkAdb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
