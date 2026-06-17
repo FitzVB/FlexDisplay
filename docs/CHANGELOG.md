@@ -7,6 +7,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [0.1.8] - 2026-06-17
 
+### Fixed
+- **Release packaging**: Gradle stdout no longer breaks APK resolution; `FlexDisplay.apk` is always included in the lite ZIP.
+
 ### Changed
 - **Capture**: hardware encoders (NVENC/AMF/QSV) now try **DXGI (`ddagrab`) first** in mirror mode; GDI remains fallback.
 - **NVENC tuning**: GOP = 1 s at 60 fps, tighter VBV (`bufsize = bitrate/8`), `-no-scenecut`, `-forced-idr 0`, `-strict_gop 1`.

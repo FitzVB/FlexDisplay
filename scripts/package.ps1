@@ -128,7 +128,9 @@ function Resolve-ApkPath {
         }
         Push-Location (Join-Path $RepoRoot "android-client")
         try {
-            .\gradlew.bat assembleDebug
+            # Gradle task lines must not reach the function output stream or $apkPath
+            # becomes an array and Copy-RequiredFiles skips the APK copy.
+            & .\gradlew.bat assembleDebug --quiet | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 throw "Android build failed"
             }
@@ -140,7 +142,7 @@ function Resolve-ApkPath {
 
     if (Test-Path $apk) {
         Write-Ok "APK ready"
-        return $apk
+        return , $apk
     }
 
     if ($SkipAndroid) {
@@ -148,8 +150,7 @@ function Resolve-ApkPath {
         return $null
     }
 
-    Write-Host "    [WARN] APK not found; package will be created without APK" -ForegroundColor Yellow
-    return $null
+    throw "APK not found at $apk - run with -BuildAndroid or build android-client first"
 }
 
 function Extract-FromZipByLeaf {
@@ -330,7 +331,13 @@ if (Test-Path $zipPath) {
 }
 
 $hostExe = Build-HostRelease
-$apkPath = Resolve-ApkPath
+$apkPath = if ($SkipAndroid) { $null } else { Resolve-ApkPath }
+if (-not $SkipAndroid) {
+    if (-not $apkPath -or -not (Test-Path -LiteralPath $apkPath)) {
+        throw "Packaging requires FlexDisplay.apk but none was resolved"
+    }
+    Write-Ok "Including APK in package ($(Split-Path $apkPath -Leaf))"
+}
 if ($SkipBundledRuntime) {
     Write-Step "Skipping bundled runtime (ADB + FFmpeg download on first run)"
     Write-Host "    Pass -BundleRuntime to scripts/release.ps1 to embed runtime in the ZIP." -ForegroundColor Gray

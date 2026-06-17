@@ -42,8 +42,8 @@ if ($Version) {
 if ($SkipAndroid) {
     $packageArgs.SkipAndroid = $true
 }
-if ((-not $SkipAndroid) -and (-not $NoBuildAndroid)) {
-    # Default behavior for simple releases: always include a fresh debug APK.
+elseif (-not $NoBuildAndroid) {
+    # Default: fresh debug APK in every release package.
     $packageArgs.BuildAndroid = $true
 }
 if ($BundleRuntime) {
@@ -56,6 +56,13 @@ Write-Host "============================" -ForegroundColor Cyan
 Write-Host ""
 
 & $packageScript @packageArgs
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$distVersion = if ($Version) { $Version } else {
+    $cargoToml = Join-Path $repoRoot "host-windows\Cargo.toml"
+    (Select-String -Path $cargoToml -Pattern 'version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+}
+$distApk = Join-Path $repoRoot "dist\FlexDisplay-v$distVersion-windows-lite\FlexDisplay.apk"
+if (-not $SkipAndroid -and -not (Test-Path -LiteralPath $distApk)) {
+    throw "Release package is missing FlexDisplay.apk at $distApk"
 }
