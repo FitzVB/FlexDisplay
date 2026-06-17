@@ -1,4 +1,5 @@
 use crate::capture::Capture;
+use crate::latency::StreamLatencyState;
 use crate::process_util;
 use crate::encoder::{amf_device_from_pre_args, encoder_extra_args, PROBE_TIMEOUT_MS};
 use crate::settings::{save_host_settings_to_disk, HostSettings};
@@ -38,6 +39,7 @@ pub async fn stream_with_ffmpeg(
     connection_alive: &Arc<std::sync::atomic::AtomicBool>,
     restart_requested: &Arc<std::sync::atomic::AtomicBool>,
     config: FfmpegConfig,
+    stream_latency: Arc<StreamLatencyState>,
     amf_settings: Option<Arc<RwLock<HostSettings>>>,
 ) -> anyhow::Result<StreamExit> {
     let mut args: Vec<String> = Vec::new();
@@ -226,93 +228,79 @@ pub async fn stream_with_ffmpeg(
     let probe_deadline =
         tokio::time::Instant::now() + tokio::time::Duration::from_millis(PROBE_TIMEOUT_MS);
 
-    let mut tick = tokio::time::interval(tokio::time::Duration::from_millis(100));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut ticker_announced = false;
-
     while connection_alive.load(Ordering::Relaxed) && !restart_requested.load(Ordering::Relaxed) {
-        tokio::select! {
-            result = async {
+        let result = async {
+            if !sent_any {
+                let remaining = probe_deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "probe timeout"));
+                }
+                match tokio::time::timeout(remaining, stdout.read(&mut buf)).await {
+                    Ok(r) => r,
+                    Err(_) => Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "probe timeout")),
+                }
+            } else {
+                stdout.read(&mut buf).await
+            }
+        }
+        .await;
+
+        match result {
+            Ok(0) => break,
+            Ok(n) => {
                 if !sent_any {
-                    let remaining = probe_deadline.saturating_duration_since(tokio::time::Instant::now());
-                    if remaining.is_zero() {
-                        return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "probe timeout"));
-                    }
-                    match tokio::time::timeout(remaining, stdout.read(&mut buf)).await {
-                        Ok(r) => r,
-                        Err(_) => Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "probe timeout")),
-                    }
-                } else {
-                    stdout.read(&mut buf).await
-                }
-            } => {
-                match result {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if !sent_any {
-                            info!(encoder = %config.encoder, "first H.264 bytes sent to client ({n} bytes)");
-                            if config.encoder == "h264_amf" {
-                                let successful_device = amf_device_from_pre_args(&config.pre_input_args);
-                                if let Some(settings) = amf_settings.clone() {
-                                    let maybe_updated = {
-                                        let mut write = settings.write().await;
-                                        if write.preferred_amf_device != successful_device {
-                                            write.preferred_amf_device = successful_device;
-                                            Some(write.clone())
-                                        } else {
-                                            None
-                                        }
-                                    };
-                                    if let Some(updated) = maybe_updated {
-                                        let to_save = updated.clone();
-                                        tokio::spawn(async move {
-                                            let _ = tokio::task::spawn_blocking(move || {
-                                                save_host_settings_to_disk(&to_save);
-                                            })
-                                            .await;
-                                            info!(
-                                                amf_device = ?updated.preferred_amf_device,
-                                                "persisted AMF device from active stream start"
-                                            );
-                                        });
-                                    }
+                    info!(encoder = %config.encoder, "first H.264 bytes sent to client ({n} bytes)");
+                    if config.encoder == "h264_amf" {
+                        let successful_device = amf_device_from_pre_args(&config.pre_input_args);
+                        if let Some(settings) = amf_settings.clone() {
+                            let maybe_updated = {
+                                let mut write = settings.write().await;
+                                if write.preferred_amf_device != successful_device {
+                                    write.preferred_amf_device = successful_device;
+                                    Some(write.clone())
+                                } else {
+                                    None
                                 }
-                            }
-                        }
-                        sent_any = true;
-                        let send_result = tokio::time::timeout(
-                            tokio::time::Duration::from_secs(2),
-                            ws_tx.send(Message::binary(buf[..n].to_vec())),
-                        )
-                        .await;
-                        match send_result {
-                            Ok(Ok(())) => {}
-                            Ok(Err(_)) => return Ok(StreamExit::SocketClosed),
-                            Err(_elapsed) => {
-                                warn!(encoder = %config.encoder, "WebSocket send stalled >2 s — Android decoder overloaded, restarting stream");
-                                return Ok(StreamExit::SocketClosed);
+                            };
+                            if let Some(updated) = maybe_updated {
+                                let to_save = updated.clone();
+                                tokio::spawn(async move {
+                                    let _ = tokio::task::spawn_blocking(move || {
+                                        save_host_settings_to_disk(&to_save);
+                                    })
+                                    .await;
+                                    info!(
+                                        amf_device = ?updated.preferred_amf_device,
+                                        "persisted AMF device from active stream start"
+                                    );
+                                });
                             }
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                        warn!(encoder = %config.encoder, timeout_ms = PROBE_TIMEOUT_MS, "encoder probe timed out with zero output");
-                        let _ = child.kill().await;
-                        return Ok(StreamExit::Unavailable);
+                }
+                sent_any = true;
+                let send_result = tokio::time::timeout(
+                    tokio::time::Duration::from_secs(2),
+                    ws_tx.send(Message::binary(buf[..n].to_vec())),
+                )
+                .await;
+                match send_result {
+                    Ok(Ok(())) => {
+                        stream_latency.mark_send_now();
                     }
-                    Err(e) => return Err(e.into()),
+                    Ok(Err(_)) => return Ok(StreamExit::SocketClosed),
+                    Err(_elapsed) => {
+                        warn!(encoder = %config.encoder, "WebSocket send stalled >2 s — Android decoder overloaded, restarting stream");
+                        return Ok(StreamExit::SocketClosed);
+                    }
                 }
             }
-            _ = tick.tick() => {
-                let now_us = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_micros();
-                if !ticker_announced {
-                    info!(encoder = %config.encoder, "e2e ticker active (T: frames every 100ms)");
-                    ticker_announced = true;
-                }
-                let _ = ws_tx.send(Message::text(format!("T:{now_us}"))).await;
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                warn!(encoder = %config.encoder, timeout_ms = PROBE_TIMEOUT_MS, "encoder probe timed out with zero output");
+                let _ = child.kill().await;
+                return Ok(StreamExit::Unavailable);
             }
+            Err(e) => return Err(e.into()),
         }
     }
 

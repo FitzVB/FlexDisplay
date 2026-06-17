@@ -41,6 +41,7 @@ pub async fn handle_h264_stream(
     settings: Arc<RwLock<HostSettings>>,
     mut reload_rx: watch::Receiver<u64>,
     env: crate::settings::EnvConfig,
+    stream_latency: Arc<crate::latency::StreamLatencyState>,
 ) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let _ = *reload_rx.borrow_and_update();
@@ -344,6 +345,7 @@ pub async fn handle_h264_stream(
                     pre_input_args: candidate.pre_input_args.clone(),
                     nvenc_gpu: candidate.nvenc_gpu,
                 },
+                stream_latency.clone(),
                 if candidate.encoder == "h264_amf" {
                     Some(settings.clone())
                 } else {

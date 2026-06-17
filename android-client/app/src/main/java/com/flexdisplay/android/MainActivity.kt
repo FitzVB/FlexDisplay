@@ -89,11 +89,14 @@ class MainActivity : AppCompatActivity() {
 
     private val reconnectHandler = Handler(Looper.getMainLooper())
     private var reconnectAttempts = 0
-    // EMA-smoothed end-to-end latency estimate from host timestamps (T: frames).
-    // We normalize with the minimum observed host->client clock delta to work even
-    // when device and PC clocks are not perfectly synchronized.
-    @Volatile private var emaE2eMs = 0f
-    @Volatile private var minObservedClockDeltaMs = Long.MAX_VALUE
+    // Latency HUD via input-channel ping/pong (not the video WebSocket queue).
+    @Volatile private var emaNetRttMs = -1f
+    @Volatile private var emaNetOneWayMs = -1f
+    @Volatile private var emaGlassMs = -1f
+    @Volatile private var emaClockOffsetMs = 0f
+    @Volatile private var clockOffsetReady = false
+    @Volatile private var lastStreamSendUs = 0L
+    @Volatile private var lastVideoRxMs = 0L
     @Volatile private var lastVideoChunkAtMs = 0L
     @Volatile private var hasReceivedVideoChunk = false
     @Volatile private var queuedMovePayload: String? = null
@@ -112,15 +115,59 @@ class MainActivity : AppCompatActivity() {
     private var lastPicW = 0; private var lastPicH = 0
     private var lastBufW = 0; private var lastBufH = 0
     private var lastCropL = 0; private var lastCropT = 0
-    // Sends a ping every 2 s to measure input round-trip time.
+    // Sends a ping every 500ms to measure network RTT and host clock offset.
     private val inputPingRunnable = object : Runnable {
         override fun run() {
             val socket = inputSocket ?: return
             if (!connected) return
             val tsMs = System.currentTimeMillis()
             socket.send("""{"type":"ping","ts_ms":$tsMs}""")
-            reconnectHandler.postDelayed(this, 2000L)
+            reconnectHandler.postDelayed(this, 500L)
         }
+    }
+
+    private fun updateLatencyFromPong(obj: JSONObject) {
+        val t0 = obj.optLong("ts_ms", -1L)
+        val t3 = System.currentTimeMillis()
+        if (t0 <= 0L) return
+
+        val rttMs = (t3 - t0).coerceAtLeast(0L)
+        inputRttMs = rttMs
+        val alpha = 0.25f
+        emaNetRttMs = if (emaNetRttMs < 0f) rttMs.toFloat()
+            else alpha * rttMs.toFloat() + (1f - alpha) * emaNetRttMs
+        emaNetOneWayMs = emaNetRttMs / 2f
+
+        val hostUs = obj.optLong("host_us", -1L)
+        if (hostUs > 0L) {
+            val clientMidMs = t0 + rttMs / 2f
+            val hostMidMs = hostUs / 1000f
+            val sampleOffset = clientMidMs - hostMidMs
+            emaClockOffsetMs = if (!clockOffsetReady) sampleOffset
+                else alpha * sampleOffset + (1f - alpha) * emaClockOffsetMs
+            clockOffsetReady = true
+        }
+
+        val streamSendUs = obj.optLong("stream_send_us", 0L)
+        if (streamSendUs > 0L) {
+            lastStreamSendUs = streamSendUs
+            if (clockOffsetReady) {
+                val hostSendOnClientMs = streamSendUs / 1000f + emaClockOffsetMs
+                val glassSample = (t3 - hostSendOnClientMs).coerceAtLeast(0f)
+                emaGlassMs = if (emaGlassMs < 1f) glassSample
+                    else alpha * glassSample + (1f - alpha) * emaGlassMs
+            }
+        }
+    }
+
+    private fun refreshGlassFromLastSend() {
+        if (!clockOffsetReady || lastStreamSendUs <= 0L) return
+        val nowMs = System.currentTimeMillis()
+        val hostSendOnClientMs = lastStreamSendUs / 1000f + emaClockOffsetMs
+        val glassSample = (nowMs - hostSendOnClientMs).coerceAtLeast(0f)
+        val alpha = 0.25f
+        emaGlassMs = if (emaGlassMs < 1f) glassSample
+            else alpha * glassSample + (1f - alpha) * emaGlassMs
     }
 
     private val inputMoveFlushRunnable = object : Runnable {
@@ -360,8 +407,14 @@ class MainActivity : AppCompatActivity() {
         val request = Request.Builder().url(streamUrl).build()
 
         reconnectHandler.removeCallbacks(streamStallWatchdog)
-        minObservedClockDeltaMs = Long.MAX_VALUE
-        emaE2eMs = 0f
+        emaNetRttMs = -1f
+        emaNetOneWayMs = -1f
+        emaGlassMs = -1f
+        emaClockOffsetMs = 0f
+        clockOffsetReady = false
+        lastStreamSendUs = 0L
+        lastVideoRxMs = 0L
+        inputRttMs = -1L
         hasReceivedVideoChunk = false
         lastVideoChunkAtMs = SystemClock.elapsedRealtime()
         streamRestartRequested = false
@@ -379,27 +432,13 @@ class MainActivity : AppCompatActivity() {
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 hasReceivedVideoChunk = true
                 lastVideoChunkAtMs = SystemClock.elapsedRealtime()
+                lastVideoRxMs = System.currentTimeMillis()
                 synchronized(decoderLock) {
                     decoder?.feed(bytes.toByteArray())
                 }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                if (text.startsWith("T:")) {
-                    val hostUs = text.removePrefix("T:").toLongOrNull() ?: return
-                    val observedDeltaMs = System.currentTimeMillis() - hostUs / 1000L
-                    // Track best (smallest) observed delta as clock-offset baseline.
-                    // Remaining delta approximates transport + encode/decode latency.
-                    if (observedDeltaMs < minObservedClockDeltaMs) {
-                        minObservedClockDeltaMs = observedDeltaMs
-                    }
-                    val e2eMs = (observedDeltaMs - minObservedClockDeltaMs).coerceAtLeast(0L)
-                    val alpha = 0.3f
-                    emaE2eMs = if (emaE2eMs < 1f) e2eMs.toFloat()
-                               else alpha * e2eMs.toFloat() + (1f - alpha) * emaE2eMs
-                    return
-                }
-
                 if (text.startsWith("CFG:")) {
                     val newProfile = formatHostProfile(text.removePrefix("CFG:"))
                     val changed = newProfile != activeStreamProfile
@@ -632,8 +671,7 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val obj = JSONObject(text)
                     if (obj.optString("type") == "pong") {
-                        val tsMs = obj.optLong("ts_ms", -1L)
-                        if (tsMs > 0L) inputRttMs = System.currentTimeMillis() - tsMs
+                        updateLatencyFromPong(obj)
                         return
                     }
                 } catch (_: Exception) {}
@@ -871,13 +909,23 @@ class MainActivity : AppCompatActivity() {
     private fun createDecoder(surface: Surface): H264Decoder {
         return H264Decoder(surface, DECODER_MAX_WIDTH, DECODER_MAX_HEIGHT) { fps, latencyMs, bufW, bufH, picW, picH, cropL, cropT, rxKbps ->
             runOnUiThread {
-                val e2e = emaE2eMs.toLong()
-                val rtt = inputRttMs
-                val rttStr = if (rtt >= 0L) "  •  ${rtt}ms rtt" else ""
-                val videoLine = if (e2e in 1L..5000L)
-                    "%.0f dec fps  •  %dms dec  •  %dms e2e$rttStr".format(fps, latencyMs, e2e)
-                else
-                    "%.0f dec fps  •  %dms dec$rttStr".format(fps, latencyMs)
+                refreshGlassFromLastSend()
+                val decodeMs = latencyMs
+                val netMs = if (emaNetOneWayMs >= 0f) emaNetOneWayMs.toLong() else -1L
+                val glassMs = if (emaGlassMs >= 1f) emaGlassMs.toLong() else -1L
+                val rxAgeMs = if (lastVideoRxMs > 0L) {
+                    (System.currentTimeMillis() - lastVideoRxMs).coerceAtLeast(0L)
+                } else {
+                    -1L
+                }
+
+                val videoLine = buildString {
+                    append("%.0f dec fps".format(fps))
+                    append("  •  ${decodeMs}ms dec")
+                    if (netMs >= 0L) append("  •  ${netMs}ms net")
+                    if (glassMs in 1L..2000L) append("  •  ${glassMs}ms glass")
+                    if (rxAgeMs in 0L..2000L) append("  •  ${rxAgeMs}ms rx")
+                }
                 if (picW > 0 && picH > 0) {
                     lastBufW = bufW; lastBufH = bufH
                     lastPicW = picW; lastPicH = picH
@@ -959,9 +1007,14 @@ class MainActivity : AppCompatActivity() {
                 when (which) {
                     0 -> showDetectedMonitorPicker()
                     1 -> {
-                        minObservedClockDeltaMs = Long.MAX_VALUE
-                        emaE2eMs = 0f
-                        appendLog("E2E latency baseline reset")
+                        emaNetRttMs = -1f
+                        emaNetOneWayMs = -1f
+                        emaGlassMs = -1f
+                        emaClockOffsetMs = 0f
+                        clockOffsetReady = false
+                        lastStreamSendUs = 0L
+                        inputRttMs = -1L
+                        appendLog("Latency baseline reset")
                     }
                     2 -> {
                         if (connected) {

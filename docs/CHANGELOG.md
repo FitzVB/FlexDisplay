@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-06-17
+
+### Fixed
+- **HUD latency metrics**: removed misleading `e2e` from video WebSocket `T:` pings (queued behind H.264 and inflated to 200ms+). HUD now shows **dec** (decoder), **net** (one-way estimate from input RTT/2), **glass** (host send to display, clock-synced), and **rx** (ms since last video packet).
+
+### Changed
+- Host records `stream_send_us` on each H.264 chunk and returns it in input-channel `pong` for accurate glass-to-glass measurement.
+
+---
+
 ## [0.2.4] - 2026-06-17
 
 ### Fixed

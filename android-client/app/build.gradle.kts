@@ -11,8 +11,8 @@ android {
         applicationId = "com.flexdisplay.android"
         minSdk = 24
         targetSdk = 34
-        versionCode = 12
-        versionName = "0.2.3"
+        versionCode = 13
+        versionName = "0.2.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
