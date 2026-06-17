@@ -44,6 +44,10 @@ if (Test-Path $runtimeEnv) {
     . $runtimeEnv -RootPath (Split-Path -Parent $PSScriptRoot)
 }
 
+if ($Silent) {
+    Update-FlexDisplayStartupProgress -Percent 34 -Message 'Conectando con el dispositivo Android...'
+}
+
 function Add-PathIfExists {
     param([string]$PathToAdd)
     if ((Test-Path $PathToAdd) -and ($env:Path -notlike "*$PathToAdd*")) {
@@ -55,9 +59,10 @@ function Resolve-AdbPath {
     param([string]$Root)
 
     $candidates = @(
+        (Join-Path $Root ".runtime\adb\platform-tools\adb.exe"),
+        (Join-Path $Root "adb.exe"),
         (Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"),
-        (Join-Path $env:USERPROFILE "AppData\Local\Android\Sdk\platform-tools\adb.exe"),
-        (Join-Path $Root "adb.exe")
+        (Join-Path $env:USERPROFILE "AppData\Local\Android\Sdk\platform-tools\adb.exe")
     )
 
     if ($env:ANDROID_SDK_ROOT) {
@@ -90,7 +95,7 @@ function Parse-ConnectedDevices {
         $trimmed = $line.Trim()
         if ($trimmed -eq "") { continue }
         if ($trimmed -like "List of devices*") { continue }
-        if ($trimmed -match "\sdevice($|\s)") {
+        if ($trimmed -match '\sdevice($|\s)') {
             $parts = $trimmed -split "\s+"
             if ($parts.Count -gt 0) {
                 $serial = $parts[0]
@@ -170,6 +175,9 @@ if (-not $Silent) {
 
 # Detect connected devices
 Write-Host "[*] Checking USB devices..." -ForegroundColor Cyan
+if ($Silent) {
+    Update-FlexDisplayStartupProgress -Percent 38 -Message 'Buscando dispositivo USB...'
+}
 $adbOut = & $adbPath devices -l
 $devices = @(Parse-ConnectedDevices -AdbDevicesLines $adbOut)
 
@@ -177,10 +185,16 @@ $selectedSerial = $null
 if ($devices.Count -eq 0) {
     Write-Host "[WARN] No USB devices found. Host will still start." -ForegroundColor Yellow
     Write-Host "       Connect a device and run START.bat again for auto-setup." -ForegroundColor Yellow
+    if ($Silent) {
+        Update-FlexDisplayStartupProgress -Percent 44 -Message 'Sin dispositivo USB - iniciando solo el servidor'
+    }
 }
 elseif ($devices.Count -eq 1) {
     $selectedSerial = $devices[0].Serial
     Write-Host "[OK] Found 1 device: $selectedSerial" -ForegroundColor Green
+    if ($Silent) {
+        Update-FlexDisplayStartupProgress -Percent 44 -Message "Dispositivo encontrado: $selectedSerial"
+    }
 }
 else {
     Write-Host "[OK] Found $($devices.Count) devices:" -ForegroundColor Green
@@ -209,12 +223,21 @@ if ($selectedSerial) {
         if ($appInstalled -and (-not $forceInstall)) {
             Write-Host "[OK] App already installed. Skipping APK install." -ForegroundColor Green
             Write-Host "     To force reinstall: run scripts\start-usb.ps1 -ForceInstallApk" -ForegroundColor Gray
+            if ($Silent) {
+                Update-FlexDisplayStartupProgress -Percent 52 -Message 'App ya instalada en el dispositivo'
+            }
         }
         else {
-            Write-Host "[*] FlexDisplay not found on device — installing APK..." -ForegroundColor Cyan
+            Write-Host "[*] FlexDisplay not found on device - installing APK..." -ForegroundColor Cyan
+            if ($Silent) {
+                Update-FlexDisplayStartupProgress -Percent 48 -Message 'Instalando FlexDisplay en el dispositivo...' -Marquee
+            }
             $installOutput = & $adbPath -s $selectedSerial install -r $apkPath 2>&1
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "[OK] App installed/updated" -ForegroundColor Green
+                if ($Silent) {
+                    Update-FlexDisplayStartupProgress -Percent 56 -Message 'App instalada correctamente'
+                }
             }
             else {
                 Write-Host "[WARN] APK install failed. Continuing anyway." -ForegroundColor Yellow
@@ -237,6 +260,9 @@ if ($selectedSerial) {
     }
 
     Write-Host "[*] Setting up USB tunnel (adb reverse)..." -ForegroundColor Cyan
+    if ($Silent) {
+        Update-FlexDisplayStartupProgress -Percent 62 -Message 'Configurando tunel USB...'
+    }
     & $adbPath -s $selectedSerial reverse --remove-all | Out-Null
     & $adbPath -s $selectedSerial reverse tcp:9001 tcp:9001 | Out-Null
     if ($LASTEXITCODE -eq 0) {
@@ -248,21 +274,22 @@ if ($selectedSerial) {
     }
 
     Write-Host "[*] Launching Android app..." -ForegroundColor Cyan
+    if ($Silent) {
+        Update-FlexDisplayStartupProgress -Percent 68 -Message 'Abriendo app en el dispositivo...'
+    }
     & $adbPath -s $selectedSerial shell monkey -p $packageName -c android.intent.category.LAUNCHER 1 | Out-Null
 
-    # Start logcat capture in background — writes to logs\logcat-<serial>.txt
-    $logDir = Join-Path (Split-Path -Parent $PSScriptRoot) "logs"
-    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-    $logcatFile = Join-Path $logDir "logcat-$selectedSerial.txt"
-    Write-Host "[*] Capturing Android logcat -> $logcatFile" -ForegroundColor Cyan
-    $logcatJob = Start-Job -ScriptBlock {
-        param($adb, $serial, $file)
-        & $adb -s $serial logcat -v time *:W H264Decoder:V MainActivity:V > $file 2>&1
-    } -ArgumentList $adbPath, $selectedSerial, $logcatFile
+    $logcatFile = Start-FlexDisplayLogcatCapture -AdbPath $adbPath -Serial $selectedSerial -Root $root
+    if ($logcatFile) {
+        Write-Host "[*] Capturing Android logcat -> $logcatFile" -ForegroundColor Cyan
+    }
 }
 
 Write-Host ""
 Write-Host "[*] Starting server..." -ForegroundColor Cyan
+if ($Silent) {
+    Update-FlexDisplayStartupProgress -Percent 74 -Message 'Iniciando servidor FlexDisplay...'
+}
 
 Stop-FlexDisplayHost -Port 9001
 
@@ -287,6 +314,9 @@ if ($hostExe) {
             exit 1
         }
         Write-Host "[OK] Host started (desktop app mode)." -ForegroundColor Green
+        if ($Silent) {
+            Update-FlexDisplayStartupProgress -Percent 78 -Message 'Servidor iniciado'
+        }
         exit 0
     }
     Set-Location $hostDir

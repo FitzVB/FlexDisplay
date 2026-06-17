@@ -224,10 +224,18 @@ async function loadAll(){
 
 function renderPresetMeta(){
     const preset = document.getElementById('preset');
+    const enc = document.getElementById('encoder');
     const meta = document.getElementById('presetMeta');
     const selected = presetDefs.find(p => p.value === preset.value) || presetDefs[0];
     if (!meta || !selected) return;
-    meta.textContent = selected.detail;
+    let detail = selected.detail;
+    const encVal = enc ? enc.value : '';
+    if (selected.value === 'full_hd' && encVal === 'libx264') {
+        detail += ' CPU encoding cannot reach 1080p60 — use NVENC or Automatic for full resolution.';
+    } else if (selected.value === 'full_hd' && encVal === '') {
+        detail += ' Uses hardware encoding when available.';
+    }
+    meta.textContent = detail;
 }
 
 async function save(){
@@ -271,6 +279,7 @@ async function save(){
 document.getElementById('save').addEventListener('click', save);
 document.getElementById('refresh').addEventListener('click', loadAll);
 document.getElementById('preset').addEventListener('change', renderPresetMeta);
+document.getElementById('encoder').addEventListener('change', renderPresetMeta);
 loadAll();
 setInterval(loadStatus, 5000);
 </script>

@@ -64,7 +64,9 @@ pub struct StreamProfile {
 }
 
 pub fn align_dim(value: u32, min: u32, max: u32) -> u32 {
-    value.clamp(min, max) & !15
+    let v = value.clamp(min, max);
+    let aligned = (v + 8) & !15;
+    aligned.clamp(min, max & !15)
 }
 
 /// Fit (w,h) inside max box preserving aspect ratio.
@@ -150,6 +152,7 @@ pub fn apply_encoder_profile_caps(
     encoder: &str,
     transport: TransportKind,
     base: StreamProfile,
+    preset: Option<&str>,
 ) -> StreamProfile {
     let mut w = base.w;
     let mut h = base.h;
@@ -157,11 +160,43 @@ pub fn apply_encoder_profile_caps(
     let mut bitrate = base.bitrate_kbps;
 
     match encoder {
-        "libx264" => {
-            (w, h) = fit_inside(w, h, 1280, 720);
-            fps = fps.min(30);
-            bitrate = bitrate.clamp(4_000, 6_000);
-        }
+        "libx264" => match preset {
+            Some("ahorro" | "cpu_safe") => {
+                (w, h) = fit_inside(w, h, 960, 544);
+                fps = fps.min(30);
+                bitrate = bitrate.clamp(4_000, 6_000);
+            }
+            Some("equilibrado" | "alta_720p") => {
+                (w, h) = fit_inside(w, h, 1280, 720);
+                fps = match transport {
+                    TransportKind::Usb => fps.min(60),
+                    TransportKind::Wifi | TransportKind::Unknown => fps.min(30),
+                };
+                bitrate = bitrate.clamp(5_000, 15_000);
+            }
+            Some("fluido_900p") => {
+                (w, h) = fit_inside(w, h, 1600, 900);
+                fps = match transport {
+                    TransportKind::Usb => fps.min(60),
+                    TransportKind::Wifi | TransportKind::Unknown => fps.min(30),
+                };
+                bitrate = bitrate.clamp(8_000, 12_000);
+            }
+            Some("full_hd" | "full_hd_max") => {
+                // 1080p60 is not sustainable on CPU — best-effort 720p60 on USB.
+                (w, h) = fit_inside(w, h, 1280, 720);
+                fps = match transport {
+                    TransportKind::Usb => fps.min(60),
+                    TransportKind::Wifi | TransportKind::Unknown => fps.min(30),
+                };
+                bitrate = bitrate.clamp(6_000, 10_000);
+            }
+            _ => {
+                (w, h) = fit_inside(w, h, 1280, 720);
+                fps = fps.min(30);
+                bitrate = bitrate.clamp(4_000, 6_000);
+            }
+        },
         "h264_nvenc" => {
             (w, h) = match transport {
                 TransportKind::Usb => fit_inside(w, h, 1920, 1200),
@@ -237,9 +272,44 @@ mod tests {
         let base = resolve_base_profile(&req);
         assert_eq!(base.w, 1920);
         assert_eq!(base.h, 1200);
-        let eff = apply_encoder_profile_caps("h264_nvenc", TransportKind::Usb, base);
+        let eff = apply_encoder_profile_caps("h264_nvenc", TransportKind::Usb, base, None);
         assert_eq!(eff.w, 1920);
         assert_eq!(eff.h, 1200);
+    }
+
+    #[test]
+    fn libx264_full_hd_usb_caps_to_720p60() {
+        let base = StreamProfile {
+            w: 1920,
+            h: 1088,
+            fps: 60,
+            bitrate_kbps: 25_000,
+        };
+        let eff = apply_encoder_profile_caps("libx264", TransportKind::Usb, base, Some("full_hd"));
+        assert!(eff.w <= 1280);
+        assert_eq!(eff.h, 720);
+        assert_eq!(eff.fps, 60);
+        assert!(eff.bitrate_kbps <= 10_000);
+    }
+
+    #[test]
+    fn libx264_equilibrado_usb_allows_60fps() {
+        let base = StreamProfile {
+            w: 1280,
+            h: 720,
+            fps: 60,
+            bitrate_kbps: 10_000,
+        };
+        let eff = apply_encoder_profile_caps("libx264", TransportKind::Usb, base, Some("equilibrado"));
+        assert_eq!(eff.w, 1280);
+        assert_eq!(eff.h, 720);
+        assert_eq!(eff.fps, 60);
+    }
+
+    #[test]
+    fn align_dim_rounds_to_nearest_sixteen() {
+        assert_eq!(align_dim(1080, 240, 2160), 1088);
+        assert_eq!(align_dim(1072, 240, 2160), 1072);
     }
 
     #[test]

@@ -129,12 +129,12 @@ pub async fn stream_with_ffmpeg(
     let bufsize = match config.encoder.as_str() {
         "h264_amf" => effective_bitrate_kbps / 2,
         // Tighter VBV for NVENC — less end-to-end buffering over USB.
-        "h264_nvenc" => effective_bitrate_kbps / 8,
+        "h264_nvenc" => effective_bitrate_kbps / 12,
         _ => effective_bitrate_kbps / 4,
     };
     let gop = match config.encoder.as_str() {
         "h264_amf" => config.fps.clamp(30, 60),
-        "libx264" => config.fps.clamp(15, 30),
+        "libx264" => config.fps.clamp(15, 60),
         // One IDR per second at 60 fps — avoids 150 KB keyframes every 0.5 s.
         "h264_nvenc" => config.fps.clamp(30, 120),
         _ => (config.fps / 2).clamp(15, 30),
@@ -456,6 +456,14 @@ pub fn adb_exe() -> std::path::PathBuf {
             return sibling;
         }
         if let Some(dir) = exe.parent() {
+            let in_runtime = dir
+                .join(".runtime")
+                .join("adb")
+                .join("platform-tools")
+                .join(name);
+            if in_runtime.exists() {
+                return in_runtime;
+            }
             let in_bin = dir.join("bin").join(name);
             if in_bin.exists() {
                 return in_bin;

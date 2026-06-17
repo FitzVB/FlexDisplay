@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-06-17
+
+### Fixed
+- **First-run START.bat failure on Windows**: UTF-8 em dash inside a PowerShell string was misread as a closing quote under the system ANSI code page, so `start-usb.ps1` failed to parse and the host never started.
+- **USB auto-install on first run**: with the parser fixed, `FlexDisplay.apk` installs automatically when the app is missing on a connected device.
+- **Logcat capture**: detached `adb logcat` process (no `Start-Job` that died when the launcher exited); fixed `Start-Process` flags.
+- **Portable ADB**: `Resolve-AdbPath` and host `adb_exe()` prefer `.runtime\adb\platform-tools\adb.exe` from the package folder.
+- **CPU preset caps**: `libx264` + named presets no longer always force 30 fps / 1280×704; `full_hd` on CPU caps to 720p60 on USB with HUD note; `equilibrado` allows 720p60 on USB.
+- **NVENC latency**: tighter NVENC VBV buffer (`bufsize = bitrate/12`) for lower glass-to-glass delay.
+
+### Added
+- **Startup progress window**: silent `START.bat` launches show a small dark splash with progress bar and status text (downloads, USB setup, APK install, server start) so first-run does not look frozen.
+
+---
+
 ## [0.2.1] - 2026-06-17
 
 ### Fixed

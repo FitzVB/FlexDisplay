@@ -791,8 +791,9 @@ class MainActivity : AppCompatActivity() {
         val resolution = "${map["w"] ?: "?"}x${map["h"] ?: "?"}"
         val fps = map["fps"] ?: "?"
         val bitrate = map["bitrate_kbps"] ?: "?"
+        val cpuLimited = map["cpu_limited"] == "1"
 
-        return getString(
+        val base = getString(
             R.string.profile_active_format_extended,
             encoderLabel,
             captureLabel,
@@ -800,6 +801,12 @@ class MainActivity : AppCompatActivity() {
             fps,
             bitrate
         ) + "  •  $profileMode/$transport"
+
+        return if (cpuLimited) {
+            "$base  •  ${getString(R.string.profile_cpu_limited_note)}"
+        } else {
+            base
+        }
     }
 
     /**

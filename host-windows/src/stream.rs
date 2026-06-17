@@ -280,11 +280,20 @@ pub async fn handle_h264_stream(
                 fps,
                 bitrate_kbps: bitrate,
             };
-            let eff = apply_encoder_profile_caps(&candidate.encoder, transport, base);
+            let eff = apply_encoder_profile_caps(
+            &candidate.encoder,
+            transport,
+            base,
+            if preset_active {
+                settings_snapshot.preferred_preset.as_deref()
+            } else {
+                None
+            },
+        );
             let (eff_w, eff_h, eff_fps, eff_bitrate) = (eff.w, eff.h, eff.fps, eff.bitrate_kbps);
 
             let profile_msg = format!(
-                "CFG:encoder={};capture={};w={};h={};fps={};bitrate_kbps={};profile={};transport={}",
+                "CFG:encoder={};capture={};w={};h={};fps={};bitrate_kbps={};profile={};transport={};cpu_limited={}",
                 candidate.encoder,
                 candidate.capture,
                 eff_w,
@@ -292,7 +301,18 @@ pub async fn handle_h264_stream(
                 eff_fps,
                 eff_bitrate,
                 profile_label,
-                transport_label
+                transport_label,
+                if candidate.encoder == "libx264"
+                    && preset_active
+                    && matches!(
+                        settings_snapshot.preferred_preset.as_deref(),
+                        Some("full_hd" | "full_hd_max")
+                    )
+                {
+                    1
+                } else {
+                    0
+                }
             );
             let _ = ws_tx.send(Message::text(profile_msg)).await;
 

@@ -37,6 +37,10 @@ if (Test-Path $runtimeEnv) {
     . $runtimeEnv -RootPath (Split-Path -Parent $PSScriptRoot)
 }
 
+if ($Silent) {
+    Update-FlexDisplayStartupProgress -Percent 36 -Message 'Detectando red Wi-Fi...'
+}
+
 # IMPORTANT: do not force localhost in Wi-Fi mode
 Remove-Item Env:FLEXDISPLAY_LISTEN -ErrorAction SilentlyContinue
 
@@ -65,6 +69,9 @@ if ($lanIp) {
 
 Write-Host ""
 Write-Host "[*] Starting host on 0.0.0.0:9001 ..." -ForegroundColor Cyan
+if ($Silent) {
+    Update-FlexDisplayStartupProgress -Percent 55 -Message 'Iniciando servidor Wi-Fi...'
+}
 
 # Kill any previous instance on port 9001 before starting fresh
 Stop-FlexDisplayHost -Port 9001
@@ -96,6 +103,9 @@ if ($hostExe) {
             exit 1
         }
         Write-Host "[OK] Host started (desktop app mode)." -ForegroundColor Green
+        if ($Silent) {
+            Update-FlexDisplayStartupProgress -Percent 78 -Message 'Servidor Wi-Fi iniciado'
+        }
         exit 0
     }
     Set-Location $hostDir

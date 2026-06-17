@@ -69,6 +69,9 @@ if ($EnsureAdb) {
     $adbExe = Join-Path $runtimeRoot "adb\platform-tools\adb.exe"
     if (-not (Test-Path $adbExe)) {
         Write-Step "Preparing local ADB runtime"
+        if (Get-Command Update-FlexDisplayStartupProgress -ErrorAction SilentlyContinue) {
+            Update-FlexDisplayStartupProgress -Percent 10 -Message 'Descargando herramientas Android (ADB)...' -Marquee
+        }
         $adbZip = Join-Path $cacheDir "platform-tools-windows.zip"
         Invoke-Download -Url "https://dl.google.com/android/repository/platform-tools-latest-windows.zip" -Dest $adbZip
 
@@ -85,12 +88,18 @@ if ($EnsureAdb) {
         throw "Could not prepare local ADB runtime"
     }
     Write-Ok "ADB runtime ready"
+    if (Get-Command Update-FlexDisplayStartupProgress -ErrorAction SilentlyContinue) {
+        Update-FlexDisplayStartupProgress -Percent 18 -Message 'ADB listo'
+    }
 }
 
 if ($EnsureFfmpeg) {
     $ffmpegExe = Join-Path $runtimeRoot "ffmpeg\bin\ffmpeg.exe"
     if (-not (Test-Path $ffmpegExe)) {
         Write-Step "Preparing local FFmpeg runtime"
+        if (Get-Command Update-FlexDisplayStartupProgress -ErrorAction SilentlyContinue) {
+            Update-FlexDisplayStartupProgress -Percent 20 -Message 'Descargando FFmpeg...' -Marquee
+        }
         $ffZip = Join-Path $cacheDir "ffmpeg-win64-gyan-release.zip"
         # Prefer stable release builds over bleeding-edge master to improve NVENC
         # compatibility on machines with slightly older NVIDIA drivers.
@@ -119,4 +128,7 @@ if ($EnsureFfmpeg) {
         throw "Could not prepare local FFmpeg runtime"
     }
     Write-Ok "FFmpeg runtime ready"
+    if (Get-Command Update-FlexDisplayStartupProgress -ErrorAction SilentlyContinue) {
+        Update-FlexDisplayStartupProgress -Percent 25 -Message 'FFmpeg listo'
+    }
 }
