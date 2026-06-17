@@ -344,6 +344,7 @@ pub async fn handle_h264_stream(
                     capture: candidate.capture,
                     pre_input_args: candidate.pre_input_args.clone(),
                     nvenc_gpu: candidate.nvenc_gpu,
+                    transport,
                 },
                 stream_latency.clone(),
                 if candidate.encoder == "h264_amf" {

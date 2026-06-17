@@ -61,7 +61,7 @@ class MainActivity : AppCompatActivity() {
         // Decoder tolerance for adaptive profiles up to 1920×1200.
         private const val DECODER_MAX_WIDTH = 1920
         private const val DECODER_MAX_HEIGHT = 1200
-        private const val INPUT_MOVE_SEND_INTERVAL_MS = 4L
+        private const val INPUT_MOVE_SEND_INTERVAL_MS = 2L
         private const val PREFS_NAME = "tablet_monitor_prefs"
         private const val PREF_LANGUAGE = "app_language"
     }
@@ -111,6 +111,7 @@ class MainActivity : AppCompatActivity() {
     // Dimensions used to configure the active decoder (set from requestedW/H in startH264Stream).
     private var decoderTargetW = DECODER_MAX_WIDTH
     private var decoderTargetH = DECODER_MAX_HEIGHT
+    private var decoderTargetFps = STREAM_FPS_USB
     // Last picture/buffer dimensions received from INFO_OUTPUT_FORMAT_CHANGED.
     private var lastPicW = 0; private var lastPicH = 0
     private var lastBufW = 0; private var lastBufH = 0
@@ -394,6 +395,7 @@ class MainActivity : AppCompatActivity() {
         // 1280x720 stream being stretched to fill the view.
         decoderTargetW = targetW
         decoderTargetH = targetH
+        decoderTargetFps = targetFps
         lastPicW = 0; lastPicH = 0; lastBufW = 0; lastBufH = 0; lastCropL = 0; lastCropT = 0
 
         synchronized(decoderLock) {
@@ -907,7 +909,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createDecoder(surface: Surface): H264Decoder {
-        return H264Decoder(surface, DECODER_MAX_WIDTH, DECODER_MAX_HEIGHT) { fps, latencyMs, bufW, bufH, picW, picH, cropL, cropT, rxKbps ->
+        return H264Decoder(surface, decoderTargetW, decoderTargetH, decoderTargetFps) { fps, latencyMs, bufW, bufH, picW, picH, cropL, cropT, rxKbps ->
             runOnUiThread {
                 refreshGlassFromLastSend()
                 val decodeMs = latencyMs
@@ -1120,6 +1122,7 @@ private class H264Decoder(
     private val surface: Surface,
     private val width: Int,
     private val height: Int,
+    private val targetFps: Int,
     private val onHudUpdate: (fps: Float, latencyMs: Long, bufW: Int, bufH: Int, picW: Int, picH: Int, cropL: Int, cropT: Int, rxKbps: Long) -> Unit
 ) {
     private val codec: MediaCodec = MediaCodec.createDecoderByType("video/avc")
@@ -1325,8 +1328,12 @@ private class H264Decoder(
                 format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 2 * 1024 * 1024)
                 if (fullConfig) {
                     format.setInteger(MediaFormat.KEY_PRIORITY, 0)
-                    format.setFloat(MediaFormat.KEY_OPERATING_RATE, 60f)
-                    format.setInteger(MediaFormat.KEY_FRAME_RATE, 60)
+                    val fpsHint = targetFps.coerceIn(15, 120).toFloat()
+                    format.setFloat(MediaFormat.KEY_OPERATING_RATE, fpsHint)
+                    format.setInteger(MediaFormat.KEY_FRAME_RATE, targetFps.coerceIn(15, 120))
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                    }
                 }
                 if (withCsd && sps != null && pps != null) {
                     format.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(startCode + sps))

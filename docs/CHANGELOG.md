@@ -12,6 +12,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 - Host records `stream_send_us` on each H.264 chunk and returns it in input-channel `pong` for accurate glass-to-glass measurement.
+- **Lower latency tuning**: decoder sized to actual stream resolution (not always 1920×1200), `KEY_LOW_LATENCY` on API 30+, AMF/QSV tighter VBV on USB, AMF `speed`/`vbaq=0`, QSV `look_ahead_depth=0`, input move throttle 2ms, `-flush_packets 1`.
 
 ---
 

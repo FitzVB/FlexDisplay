@@ -1,5 +1,6 @@
 use crate::capture::Capture;
 use crate::latency::StreamLatencyState;
+use crate::profile::TransportKind;
 use crate::process_util;
 use crate::encoder::{amf_device_from_pre_args, encoder_extra_args, PROBE_TIMEOUT_MS};
 use crate::settings::{save_host_settings_to_disk, HostSettings};
@@ -32,6 +33,7 @@ pub struct FfmpegConfig {
     pub capture: Capture,
     pub pre_input_args: Vec<String>,
     pub nvenc_gpu: Option<u32>,
+    pub transport: TransportKind,
 }
 
 pub async fn stream_with_ffmpeg(
@@ -128,14 +130,16 @@ pub async fn stream_with_ffmpeg(
         config.bitrate_kbps
     };
 
+    let usb = config.transport == TransportKind::Usb;
     let bufsize = match config.encoder.as_str() {
-        "h264_amf" => effective_bitrate_kbps / 2,
-        // Tighter VBV for NVENC — less end-to-end buffering over USB.
+        // Tighter VBV on USB — less encoder buffering; WiFi keeps headroom for jitter.
+        "h264_amf" => effective_bitrate_kbps / if usb { 8 } else { 4 },
         "h264_nvenc" => effective_bitrate_kbps / 12,
+        "h264_qsv" => effective_bitrate_kbps / if usb { 8 } else { 4 },
         _ => effective_bitrate_kbps / 4,
     };
     let gop = match config.encoder.as_str() {
-        "h264_amf" => config.fps.clamp(30, 60),
+        "h264_amf" => config.fps.clamp(15, 120),
         "libx264" => config.fps.clamp(15, 60),
         // One IDR per second at 60 fps — avoids 150 KB keyframes every 0.5 s.
         "h264_nvenc" => config.fps.clamp(30, 120),
@@ -152,6 +156,8 @@ pub async fn stream_with_ffmpeg(
         format!("{}k", bufsize),
         "-bsf:v".into(),
         "dump_extra".into(),
+        "-flush_packets".into(),
+        "1".into(),
         "-f".into(),
         "h264".into(),
         "-".into(),
