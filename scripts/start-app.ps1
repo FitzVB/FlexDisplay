@@ -10,10 +10,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'lib\Common.ps1')
+
 $logDir = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-$logFile = Join-Path $logDir 'flexdisplay-start.log'
-Start-Transcript -Path $logFile -Append -ErrorAction SilentlyContinue | Out-Null
+$launcherLog = Join-Path $logDir 'flexdisplay-launcher.log'
+Start-Transcript -Path $launcherLog -Append -ErrorAction SilentlyContinue | Out-Null
 
 $ensureRuntimeScript = Join-Path $PSScriptRoot 'ensure-runtime.ps1'
 if (Test-Path $ensureRuntimeScript) {
@@ -21,12 +23,16 @@ if (Test-Path $ensureRuntimeScript) {
         & $ensureRuntimeScript -RootPath $root -EnsureAdb -EnsureFfmpeg
     }
     catch {
-        Add-Content -Path $logFile -Value "[WARN] Runtime prepare failed: $($_.Exception.Message)"
+        Add-Content -Path $launcherLog -Value "[WARN] Runtime prepare failed: $($_.Exception.Message)" -ErrorAction SilentlyContinue
     }
 }
 
-$env:FLEXDISPLAY_EXIT_ON_GUI_CLOSE = '1'
+Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+
 $env:FLEXDISPLAY_FPS = '60'
+$port = 9001
+
+$ErrorActionPreference = 'Continue'
 
 if ($Mode -eq 'WiFi') {
     Remove-Item Env:FLEXDISPLAY_LISTEN -ErrorAction SilentlyContinue
@@ -37,4 +43,18 @@ else {
     & (Join-Path $PSScriptRoot 'start-usb.ps1') -Silent
 }
 
-Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+Add-Content -Path $launcherLog -Value "[*] Waiting for host on port $port" -ErrorAction SilentlyContinue
+if (-not (Wait-FlexDisplayHostReady -Port $port)) {
+    Add-Content -Path $launcherLog -Value "[ERROR] Host did not start listening on port $port" -ErrorAction SilentlyContinue
+    exit 1
+}
+
+Add-Content -Path $launcherLog -Value "[*] Opening desktop control panel" -ErrorAction SilentlyContinue
+$guiProc = Open-FlexDisplayGui -Root $root -HostIp '127.0.0.1' -Port $port
+if (-not $guiProc) {
+    Add-Content -Path $launcherLog -Value "[WARN] Could not open Edge/Chrome app window; browse http://127.0.0.1:$port manually" -ErrorAction SilentlyContinue
+    exit 0
+}
+
+Add-Content -Path $launcherLog -Value "[OK] Desktop control panel launched" -ErrorAction SilentlyContinue
+exit 0

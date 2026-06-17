@@ -5,17 +5,24 @@ param(
 )
 
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "lib\Common.ps1")
 if ($Silent) {
     $logDir = Join-Path $root "logs"
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-    $script:LogFile = Join-Path $logDir "flexdisplay-start.log"
+    Enable-SilentFileLogging -LogFile (Join-Path $logDir "flexdisplay-start.log")
     function Write-Host {
+        [CmdletBinding()]
         param(
-            [Parameter(Position = 0)][object]$Object,
-            [switch]$NoNewline
+            [Parameter(Position = 0, ValueFromPipeline = $true)]
+            [object]$Object,
+            [switch]$NoNewline,
+            [System.ConsoleColor]$ForegroundColor,
+            [System.ConsoleColor]$BackgroundColor
         )
-        if ($null -ne $Object) {
-            Add-Content -LiteralPath $script:LogFile -Value ([string]$Object)
+        process {
+            if ($null -ne $Object -and $script:FlexDisplayLogFile) {
+                Add-Content -LiteralPath $script:FlexDisplayLogFile -Value ([string]$Object) -ErrorAction SilentlyContinue
+            }
         }
     }
 }
@@ -29,7 +36,6 @@ $runtimeEnv = Join-Path $PSScriptRoot "runtime-env.ps1"
 if (Test-Path $runtimeEnv) {
     . $runtimeEnv -RootPath (Split-Path -Parent $PSScriptRoot)
 }
-. (Join-Path $PSScriptRoot "lib\Common.ps1")
 
 # IMPORTANT: do not force localhost in Wi-Fi mode
 Remove-Item Env:FLEXDISPLAY_LISTEN -ErrorAction SilentlyContinue
@@ -66,10 +72,12 @@ Stop-FlexDisplayHost -Port 9001
 $root = Split-Path -Parent $PSScriptRoot
 $env:FLEXDISPLAY_FPS = '60'
 
-# Register cleanup: runs when terminal window closes or PowerShell engine exits
-Register-EngineEvent PowerShell.Exiting -Action {
-    Invoke-FlexDisplayCleanup -Port 9001
-} | Out-Null
+# Register cleanup when running in an interactive console (not silent desktop launcher).
+if (-not $Silent) {
+    Register-EngineEvent PowerShell.Exiting -Action {
+        Invoke-FlexDisplayCleanup -Port 9001
+    } | Out-Null
+}
 
 function Invoke-Cleanup {
     Invoke-FlexDisplayCleanup -Port 9001
@@ -78,6 +86,18 @@ function Invoke-Cleanup {
 $hostExe = Resolve-HostExePath -Root $root
 if ($hostExe) {
     $hostDir = Split-Path -Parent $hostExe
+    if ($Silent) {
+        $started = Start-FlexDisplayHostDetached -Root $root -EnvOverrides @{
+            FLEXDISPLAY_DISABLE_AUTO_GUI = '1'
+            FLEXDISPLAY_FPS              = '60'
+        }
+        if (-not $started) {
+            Write-Host "[ERROR] Host executable not found." -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "[OK] Host started (desktop app mode)." -ForegroundColor Green
+        exit 0
+    }
     Set-Location $hostDir
     try {
         & $hostExe

@@ -1,4 +1,5 @@
 use crate::capture::Capture;
+use crate::process_util;
 use crate::encoder::{amf_device_from_pre_args, encoder_extra_args, PROBE_TIMEOUT_MS};
 use crate::settings::{save_host_settings_to_disk, HostSettings};
 use futures::SinkExt;
@@ -155,6 +156,7 @@ pub async fn stream_with_ffmpeg(
     ]);
 
     let mut cmd = Command::new(ffmpeg_exe());
+    process_util::hide_tokio_command(&mut cmd);
     cmd.args(&args)
         .kill_on_drop(true)
         .stdin(std::process::Stdio::null())

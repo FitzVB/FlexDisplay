@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-06-17
+
+### Fixed
+- **START.bat silent launch**: separate launcher/USB logs (no transcript lock), proper silent `Write-Host` shim, detached host process, `FlexDisplay-OpenGui.vbs` opens the desktop panel visibly.
+- **CMD window flashing**: subprocesses (`powershell`, `adb`, `ffmpeg`) use `CREATE_NO_WINDOW` on Windows.
+- **USB auto-install**: `FlexDisplay.apk` in the package is preferred; if the Android app is missing on a connected USB device, `START.bat` installs it automatically before launching.
+
+### Changed
+- **Android client (v0.2.1)**: dark futuristic theme aligned with the PC panel, glass setup panel, portrait layout.
+
+---
+
 ## [0.2.0] - 2026-06-17
 
 ### Added

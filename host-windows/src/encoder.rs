@@ -59,7 +59,7 @@ pub fn detect_gpus() -> Vec<GpuInfo> {
     let ps = r#"Get-CimInstance Win32_VideoController |
 Select-Object Name,DriverVersion |
 ConvertTo-Json -Compress"#;
-    let output = std::process::Command::new("powershell")
+    let output = crate::process_util::hidden_command("powershell")
         .args(["-NoProfile", "-Command", ps])
         .output();
 
@@ -105,7 +105,7 @@ pub fn detect_available_h264_encoders(gpus: &[GpuInfo], force_software: bool) ->
         return vec!["libx264".to_string()];
     }
 
-    let output = std::process::Command::new(ffmpeg_exe())
+    let output = crate::process_util::hidden_command(ffmpeg_exe())
         .arg("-hide_banner")
         .arg("-encoders")
         .output();

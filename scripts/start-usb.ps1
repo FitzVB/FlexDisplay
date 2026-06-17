@@ -12,17 +12,24 @@ param(
 )
 
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "lib\Common.ps1")
 if ($Silent) {
     $logDir = Join-Path $root "logs"
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-    $script:LogFile = Join-Path $logDir "flexdisplay-start.log"
+    Enable-SilentFileLogging -LogFile (Join-Path $logDir "flexdisplay-start.log")
     function Write-Host {
+        [CmdletBinding()]
         param(
-            [Parameter(Position = 0)][object]$Object,
-            [switch]$NoNewline
+            [Parameter(Position = 0, ValueFromPipeline = $true)]
+            [object]$Object,
+            [switch]$NoNewline,
+            [System.ConsoleColor]$ForegroundColor,
+            [System.ConsoleColor]$BackgroundColor
         )
-        if ($null -ne $Object) {
-            Add-Content -LiteralPath $script:LogFile -Value ([string]$Object)
+        process {
+            if ($null -ne $Object -and $script:FlexDisplayLogFile) {
+                Add-Content -LiteralPath $script:FlexDisplayLogFile -Value ([string]$Object) -ErrorAction SilentlyContinue
+            }
         }
     }
 }
@@ -36,7 +43,6 @@ $runtimeEnv = Join-Path $PSScriptRoot "runtime-env.ps1"
 if (Test-Path $runtimeEnv) {
     . $runtimeEnv -RootPath (Split-Path -Parent $PSScriptRoot)
 }
-. (Join-Path $PSScriptRoot "lib\Common.ps1")
 
 function Add-PathIfExists {
     param([string]$PathToAdd)
@@ -104,8 +110,8 @@ function Resolve-ApkPath {
     param([string]$Root)
 
     $candidates = @(
-        (Join-Path $Root "android-client\app\build\outputs\apk\debug\app-debug.apk"),
-        (Join-Path $Root "FlexDisplay.apk")
+        (Join-Path $Root "FlexDisplay.apk"),
+        (Join-Path $Root "android-client\app\build\outputs\apk\debug\app-debug.apk")
     )
 
     foreach ($candidate in $candidates) {
@@ -155,10 +161,12 @@ Write-Host "[*] Using ADB: $adbPath" -ForegroundColor Gray
 Write-Host '[*] Resetting ADB server (clearing stale connections)...' -ForegroundColor Cyan
 & $adbPath kill-server 2>$null | Out-Null
 
-# Register cleanup: runs when terminal window closes or PowerShell engine exits
-Register-EngineEvent PowerShell.Exiting -MessageData $adbPath -Action {
-    Invoke-FlexDisplayCleanup -AdbExe $event.MessageData -Port 9001
-} | Out-Null
+# Register cleanup when running in an interactive console (not silent desktop launcher).
+if (-not $Silent) {
+    Register-EngineEvent PowerShell.Exiting -MessageData $adbPath -Action {
+        Invoke-FlexDisplayCleanup -AdbExe $event.MessageData -Port 9001
+    } | Out-Null
+}
 
 # Detect connected devices
 Write-Host "[*] Checking USB devices..." -ForegroundColor Cyan
@@ -203,7 +211,7 @@ if ($selectedSerial) {
             Write-Host "     To force reinstall: run scripts\start-usb.ps1 -ForceInstallApk" -ForegroundColor Gray
         }
         else {
-            Write-Host "[*] Installing app on device..." -ForegroundColor Cyan
+            Write-Host "[*] FlexDisplay not found on device — installing APK..." -ForegroundColor Cyan
             $installOutput = & $adbPath -s $selectedSerial install -r $apkPath 2>&1
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "[OK] App installed/updated" -ForegroundColor Green
@@ -268,6 +276,19 @@ function Invoke-Cleanup {
 $hostExe = Resolve-HostExePath -Root $root
 if ($hostExe) {
     $hostDir = Split-Path -Parent $hostExe
+    if ($Silent) {
+        $started = Start-FlexDisplayHostDetached -Root $root -EnvOverrides @{
+            FLEXDISPLAY_DISABLE_AUTO_GUI = '1'
+            FLEXDISPLAY_LISTEN           = '127.0.0.1'
+            FLEXDISPLAY_FPS              = '60'
+        }
+        if (-not $started) {
+            Write-Host "[ERROR] Host executable not found." -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "[OK] Host started (desktop app mode)." -ForegroundColor Green
+        exit 0
+    }
     Set-Location $hostDir
     try {
         & $hostExe

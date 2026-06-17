@@ -252,6 +252,7 @@ function Copy-RequiredFiles {
     Copy-Item (Join-Path $RepoRoot "STOP.bat") (Join-Path $DistRoot "STOP.bat") -Force
     Copy-Item (Join-Path $RepoRoot "WIFI.bat") (Join-Path $DistRoot "WIFI.bat") -Force
     Copy-Item (Join-Path $RepoRoot "FlexDisplay.vbs") (Join-Path $DistRoot "FlexDisplay.vbs") -Force
+    Copy-Item (Join-Path $RepoRoot "FlexDisplay-OpenGui.vbs") (Join-Path $DistRoot "FlexDisplay-OpenGui.vbs") -Force
     Copy-Item (Join-Path $RepoRoot "FlexDisplay-WiFi.vbs") (Join-Path $DistRoot "FlexDisplay-WiFi.vbs") -Force
 
     $scriptFiles = @(
@@ -295,10 +296,10 @@ FlexDisplay - Quick Start
    - Or WIFI.bat for wireless mode on the same LAN
 2. On first run, ADB and FFmpeg download automatically (internet required once)
 3. The host control panel opens as a desktop app (Edge/Chrome)
-4. In USB mode the Android app is auto-installed when a device is connected
-5. To stop: close the control panel window or double-click STOP.bat
+4. In USB mode, with the tablet connected and USB debugging on, FlexDisplay.apk is auto-installed if the app is not on the device yet, then the app opens
+5. To stop: double-click STOP.bat (closing Edge may leave the host running)
 
-Logs (if needed): logs/flexdisplay-start.log
+Logs (if needed): logs/flexdisplay-launcher.log and logs/flexdisplay-start.log
 
 Extended display (optional):
   Install the Virtual Display Driver from:

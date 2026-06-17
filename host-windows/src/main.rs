@@ -7,6 +7,7 @@ mod capture;
 mod encoder;
 mod ffmpeg;
 mod gui;
+mod process_util;
 mod input;
 mod profile;
 mod settings;
@@ -14,6 +15,7 @@ mod stream;
 
 use encoder::{detect_available_h264_encoders, detect_gpus, GpuInfo};
 use ffmpeg::adb_exe;
+use process_util::hidden_command;
 use settings::{
     canonical_bitrate_kbps, canonical_encoder, canonical_preset, canonical_resolution,
     load_host_settings_from_disk, save_host_settings_to_disk, EnvConfig, HostSettings,
@@ -66,7 +68,7 @@ fn detect_lan_ipv4() -> Option<String> {
             $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254*' -and
             $_.InterfaceAlias -notmatch 'Loopback|vEthernet|Virtual|Hyper-V|VPN|Tailscale'
         } | Sort-Object InterfaceMetric | Select-Object -First 1 -ExpandProperty IPAddress)"#;
-        let out = std::process::Command::new("powershell")
+        let out = hidden_command("powershell")
             .args(["-NoProfile", "-Command", ps])
             .output()
             .ok()?;
@@ -84,7 +86,7 @@ fn detect_lan_ipv4() -> Option<String> {
 
 fn adb_device_connected() -> bool {
     let adb = adb_exe();
-    let out = std::process::Command::new(&adb).args(["devices"]).output();
+    let out = hidden_command(&adb).args(["devices"]).output();
     let Ok(out) = out else {
         return false;
     };
@@ -345,7 +347,7 @@ async fn main() -> anyhow::Result<()> {
 
     {
         let adb = adb_exe();
-        match std::process::Command::new(&adb)
+        match hidden_command(&adb)
             .args([
                 "reverse",
                 &format!("tcp:{listen_port}"),

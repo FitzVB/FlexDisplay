@@ -1,5 +1,74 @@
 # FlexDisplay shared PowerShell helpers
 
+function Enable-SilentFileLogging {
+    param([string]$LogFile)
+    $script:FlexDisplayLogFile = $LogFile
+}
+
+function Wait-FlexDisplayHostReady {
+    param(
+        [int]$Port = 9001,
+        [int]$TimeoutSec = 30
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 400
+    }
+    return $false
+}
+
+function Open-FlexDisplayGui {
+    param(
+        [string]$Root,
+        [string]$HostIp = '127.0.0.1',
+        [int]$Port = 9001
+    )
+
+    $openGuiVbs = Join-Path $Root 'FlexDisplay-OpenGui.vbs'
+    if (Test-Path -LiteralPath $openGuiVbs) {
+        Start-Process wscript.exe -ArgumentList @('//B', $openGuiVbs) -WindowStyle Hidden | Out-Null
+        return [PSCustomObject]@{ Launched = $true; Port = $Port }
+    }
+
+    $url = "http://${HostIp}:${Port}"
+    $candidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'),
+        (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'),
+        (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe')
+    )
+
+    foreach ($browser in $candidates) {
+        if (Test-Path -LiteralPath $browser) {
+            return Start-Process -FilePath $browser -ArgumentList "--app=$url" -PassThru
+        }
+    }
+
+    Start-Process $url | Out-Null
+    return $null
+}
+
+function Wait-FlexDisplayGuiClose {
+    param(
+        [int]$Port = 9001,
+        [int]$GraceSec = 8
+    )
+
+    Start-Sleep -Seconds $GraceSec
+    while ($true) {
+        $running = Get-CimInstance Win32_Process -Filter "Name='msedge.exe' OR Name='chrome.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -like "*--app=*${Port}*" }
+        if (-not $running) {
+            return
+        }
+        Start-Sleep -Seconds 2
+    }
+}
+
 function Resolve-HostExePath {
     param([string]$Root)
 
@@ -31,7 +100,7 @@ function Stop-FlexDisplayHost {
 }
 
 function Stop-FlexDisplayGui {
-    Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
+    Get-CimInstance Win32_Process -Filter "Name='msedge.exe' OR Name='chrome.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -like '*--app=*9001*' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
@@ -49,6 +118,26 @@ function Invoke-FlexDisplayCleanup {
     }
     Get-Job | Where-Object { $_.State -eq 'Running' } | Stop-Job -PassThru | Remove-Job -Force -ErrorAction SilentlyContinue
     Write-Host '[OK] Cleanup done.' -ForegroundColor Green
+}
+
+function Start-FlexDisplayHostDetached {
+    param(
+        [string]$Root,
+        [hashtable]$EnvOverrides = @{}
+    )
+
+    foreach ($key in $EnvOverrides.Keys) {
+        Set-Item -Path "Env:$key" -Value $EnvOverrides[$key]
+    }
+
+    $hostExe = Resolve-HostExePath -Root $Root
+    if (-not $hostExe) {
+        return $false
+    }
+
+    $hostDir = Split-Path -Parent $hostExe
+    Start-Process -FilePath $hostExe -WorkingDirectory $hostDir | Out-Null
+    return $true
 }
 
 function Start-FlexDisplayHost {
