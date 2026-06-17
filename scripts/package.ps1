@@ -115,6 +115,37 @@ function Build-HostRelease {
     return $hostExe
 }
 
+function Invoke-SignHostExecutable {
+    param([string]$ExePath)
+
+    $pfx = $env:FLEXDISPLAY_SIGN_PFX
+    $pass = $env:FLEXDISPLAY_SIGN_PASSWORD
+    if (-not $pfx -or -not (Test-Path -LiteralPath $pfx) -or -not $pass) {
+        return
+    }
+
+    $signtool = Get-ChildItem -Path @(
+        (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'),
+        (Join-Path $env:ProgramFiles 'Windows Kits\10\bin')
+    ) -Filter 'signtool.exe' -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+
+    if (-not $signtool) {
+        Write-Host "    [WARN] signtool not found; skipping Authenticode signing" -ForegroundColor Yellow
+        return
+    }
+
+    & $signtool.FullName sign /fd SHA256 /f $pfx /p $pass /tr http://timestamp.digicert.com /td SHA256 $ExePath
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Host binary signed (Authenticode)"
+    }
+    else {
+        Write-Host "    [WARN] signtool sign failed (exit $LASTEXITCODE)" -ForegroundColor Yellow
+    }
+}
+
 function Resolve-ApkPath {
     $apk = Join-Path $RepoRoot "android-client\app\build\outputs\apk\debug\app-debug.apk"
 
@@ -242,6 +273,7 @@ function Copy-RequiredFiles {
     Write-Step "Copying package files"
     New-Item -ItemType Directory -Force -Path (Join-Path $DistRoot "scripts") | Out-Null
 
+    Copy-Item $HostExe (Join-Path $DistRoot "FlexDisplay.exe") -Force
     Copy-Item $HostExe (Join-Path $DistRoot "host-windows.exe") -Force
 
     if ($ApkPath -and (Test-Path $ApkPath)) {
@@ -254,6 +286,9 @@ function Copy-RequiredFiles {
     Copy-Item (Join-Path $RepoRoot "FlexDisplay.vbs") (Join-Path $DistRoot "FlexDisplay.vbs") -Force
     Copy-Item (Join-Path $RepoRoot "FlexDisplay-OpenGui.vbs") (Join-Path $DistRoot "FlexDisplay-OpenGui.vbs") -Force
     Copy-Item (Join-Path $RepoRoot "FlexDisplay-WiFi.vbs") (Join-Path $DistRoot "FlexDisplay-WiFi.vbs") -Force
+    if (Test-Path (Join-Path $RepoRoot "DEFENDER-EXCLUSION.bat")) {
+        Copy-Item (Join-Path $RepoRoot "DEFENDER-EXCLUSION.bat") (Join-Path $DistRoot "DEFENDER-EXCLUSION.bat") -Force
+    }
 
     $scriptFiles = @(
         "launcher.ps1",
@@ -262,7 +297,8 @@ function Copy-RequiredFiles {
         "runtime-env.ps1",
         "start-usb.ps1",
         "start-wifi.ps1",
-        "stop-usb.ps1"
+        "stop-usb.ps1",
+        "add-defender-exclusion.ps1"
     )
 
     foreach ($file in $scriptFiles) {
@@ -294,10 +330,17 @@ FlexDisplay - Quick Start
 
 1. Double-click START.bat (USB mode, no console window)
    - Or WIFI.bat for wireless mode on the same LAN
-2. On first run, ADB and FFmpeg download automatically (internet required once)
+2. On first run, ADB and FFmpeg install automatically (winget when available, else download)
 3. The host control panel opens as a desktop app (Edge/Chrome)
 4. In USB mode, with the tablet connected and USB debugging on, FlexDisplay.apk is auto-installed if the app is not on the device yet, then the app opens
 5. To stop: double-click STOP.bat (closing Edge may leave the host running)
+
+Antivirus / Windows Defender (false positives):
+  Unsigned open-source builds may be flagged on first run because FlexDisplay.exe
+  captures the screen and launches ADB/FFmpeg (normal for this app).
+  - Run DEFENDER-EXCLUSION.bat once as Administrator (Windows Defender only), or
+  - Add this folder as an exclusion in your antivirus settings.
+  - Verify SHA256 checksums in SHA256SUMS.txt against the GitHub release page.
 
 Logs (if needed): logs/flexdisplay-launcher.log and logs/flexdisplay-start.log
 
@@ -309,6 +352,16 @@ Extended display (optional):
 For the full manual: see README.md or QUICK-START.md
 "@
     Set-Content -Path (Join-Path $DistRoot "QUICK_START.txt") -Value $quick -Encoding UTF8
+
+    $exePath = Join-Path $DistRoot "FlexDisplay.exe"
+    if (Test-Path -LiteralPath $exePath) {
+        $hash = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
+        @(
+            "# FlexDisplay v$Version - SHA256"
+            "$hash  FlexDisplay.exe"
+            "# host-windows.exe is a copy of FlexDisplay.exe for compatibility"
+        ) | Set-Content -Path (Join-Path $DistRoot "SHA256SUMS.txt") -Encoding ASCII
+    }
 
     Write-Ok "Files copied"
 }
@@ -339,6 +392,7 @@ if (Test-Path $zipPath) {
 }
 
 $hostExe = Build-HostRelease
+Invoke-SignHostExecutable -ExePath $hostExe
 $apkPath = if ($SkipAndroid) { $null } else { Resolve-ApkPath }
 if (-not $SkipAndroid) {
     if (-not $apkPath -or -not (Test-Path -LiteralPath $apkPath)) {

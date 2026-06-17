@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-06-17
+
+### Fixed
+- **Antivirus false positives**: host binary ships as `FlexDisplay.exe` with updated PE metadata; first-run prefers **winget** (signed ADB/FFmpeg packages) over extracting downloaded tools into `.runtime`.
+- **Defender helper**: `DEFENDER-EXCLUSION.bat` adds the install folder to Microsoft Defender exclusions (optional, run once as admin).
+
+### Added
+- **SHA256SUMS.txt** in release packages for integrity verification.
+
+---
+
 ## [0.2.3] - 2026-06-17
 
 ### Fixed

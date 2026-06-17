@@ -204,6 +204,7 @@ function Resolve-HostExePath {
     param([string]$Root)
 
     $candidates = @(
+        (Join-Path $Root "FlexDisplay.exe"),
         (Join-Path $Root "host-windows\target\release\host-windows.exe"),
         (Join-Path $Root "host-windows.exe")
     )
