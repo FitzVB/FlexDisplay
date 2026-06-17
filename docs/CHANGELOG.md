@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-17
+
+### Added
+- **Desktop app launcher**: `START.bat` / `WIFI.bat` launch via hidden VBS scripts — no console window; host opens in Edge/Chrome app mode.
+- **Host status API**: `GET /api/status` (mode, LAN IP, ADB device connected).
+- **Silent startup logs**: `logs/flexdisplay-start.log` when using the desktop launcher.
+
+### Changed
+- **PC control panel**: new dark futuristic web UI (Inter + Orbitron, glass panels, live status pills).
+- **Android UI**: dark futuristic theme aligned with the desktop panel (cyan/violet accents, glass setup panel).
+- **Host binary**: release builds use `windows_subsystem = "windows"` (no extra console when launched directly).
+
+---
+
+## [0.1.9] - 2026-06-17
+
+### Fixed
+- **NVENC probe blacklist**: stale `failed_probe_keys` no longer block all encoder candidates; invalid GPU indices are cleared on load and at stream start.
+- **Android portrait**: dedicated `layout-port`, scrollable setup panel, stream restart and letterbox reflow on rotation.
+
+---
+
 ## [0.1.8] - 2026-06-17
 
 ### Fixed

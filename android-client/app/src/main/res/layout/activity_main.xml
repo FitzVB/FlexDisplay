@@ -5,6 +5,12 @@
     android:background="@drawable/bg_app_root"
     android:orientation="vertical">
 
+    <ScrollView
+        android:id="@+id/setupScroll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fillViewport="false">
+
     <LinearLayout
         android:id="@+id/topPanel"
         android:layout_width="match_parent"
@@ -46,7 +52,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="3dp"
                     android:text="@string/app_subtitle"
-                    android:textColor="#FFDCE7FF"
+                    android:textColor="@color/fd_text_muted"
                     android:textSize="13sp" />
             </LinearLayout>
 
@@ -55,7 +61,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="6dp"
-                android:backgroundTint="@color/fd_aqua_cyan"
+                android:backgroundTint="@color/fd_cyan"
                 android:textColor="@color/fd_white"
                 android:text="@string/btn_menu" />
 
@@ -64,7 +70,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="6dp"
-                android:backgroundTint="@color/fd_deep_blue_dark"
+                android:backgroundTint="@color/fd_violet"
                 android:textColor="@color/fd_white"
                 android:text="@string/btn_language" />
 
@@ -72,7 +78,7 @@
                 android:id="@+id/helpButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:backgroundTint="@color/fd_deep_blue_dark"
+                android:backgroundTint="@color/fd_violet"
                 android:textColor="@color/fd_white"
                 android:text="@string/btn_help" />
         </LinearLayout>
@@ -96,15 +102,15 @@
             android:singleLine="true"
             android:text="127.0.0.1"
             android:textColor="@color/fd_white"
-            android:textColorHint="#B3FFFFFF"
-            android:backgroundTint="@color/fd_aqua_cyan" />
+            android:textColorHint="@color/fd_text_muted"
+            android:backgroundTint="@color/fd_cyan" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:text="@string/hint_pc_ip_desc"
-            android:textColor="#FFD0DCF4"
+            android:textColor="@color/fd_text_muted"
             android:textSize="11sp" />
 
         <LinearLayout
@@ -133,7 +139,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="6dp"
                     android:entries="@array/display_modes"
-                    android:backgroundTint="@color/fd_aqua_cyan" />
+                    android:backgroundTint="@color/fd_cyan" />
             </LinearLayout>
 
             <Space
@@ -163,8 +169,8 @@
                     android:singleLine="true"
                     android:text=""
                     android:textColor="@color/fd_white"
-                    android:textColorHint="#B3FFFFFF"
-                    android:backgroundTint="@color/fd_aqua_cyan" />
+                    android:textColorHint="@color/fd_text_muted"
+                    android:backgroundTint="@color/fd_cyan" />
             </LinearLayout>
         </LinearLayout>
 
@@ -173,7 +179,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
-            android:backgroundTint="@color/fd_vibrant_orange"
+            android:backgroundTint="@color/fd_orange"
             android:textColor="@color/fd_white"
             android:text="@string/btn_connect" />
 
@@ -191,8 +197,8 @@
                 android:checked="true"
                 android:text="@string/label_hud"
                 android:textColor="@color/fd_white"
-                android:thumbTint="@color/fd_aqua_cyan"
-                android:trackTint="#80FFFFFF" />
+                android:thumbTint="@color/fd_cyan"
+                android:trackTint="@color/fd_track" />
         </LinearLayout>
 
         <TextView
@@ -200,9 +206,11 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:textColor="#FFE4ECFF"
+            android:textColor="@color/fd_text_muted"
             android:text="@string/status_disconnected" />
     </LinearLayout>
+
+    </ScrollView>
 
     <FrameLayout
         android:id="@+id/streamContainer"
@@ -237,7 +245,7 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:background="@color/fd_soft_bg"
+        android:background="@color/fd_log_bg"
         android:layout_marginTop="4dp">
 
         <TextView

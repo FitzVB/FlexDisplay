@@ -198,16 +198,54 @@ pub async fn handle_h264_stream(
             .or_else(|| std::env::var("FLEXDISPLAY_CAPTURE").ok());
         let capture_env_ref = capture_env_owned.as_deref();
 
-        let candidates = build_encoder_candidates(&CandidateBuildOptions {
+        let gpu_count = gpus.len() as u32;
+        let mut settings_for_probe = settings_snapshot.clone();
+        crate::settings::sanitize_probe_state(&mut settings_for_probe, gpu_count);
+
+        let mut candidates = build_encoder_candidates(&CandidateBuildOptions {
             available_encoders: &available_encoders,
             preferred_encoder: preferred.as_deref(),
             manual_encoder_lock,
             stream_mode: &stream_mode,
             capture_env: capture_env_ref,
-            settings: &settings_snapshot,
+            settings: &settings_for_probe,
             gpus: &gpus,
             force_software: env.force_software_encoder,
         });
+
+        if candidates.is_empty() {
+            if let Some(ref enc) = preferred {
+                tracing::warn!(
+                    encoder = %enc,
+                    "all encoder probes blocked; clearing stale failures and retrying"
+                );
+                crate::settings::clear_encoder_probe_failures(&mut settings_for_probe, enc);
+                candidates = build_encoder_candidates(&CandidateBuildOptions {
+                    available_encoders: &available_encoders,
+                    preferred_encoder: preferred.as_deref(),
+                    manual_encoder_lock,
+                    stream_mode: &stream_mode,
+                    capture_env: capture_env_ref,
+                    settings: &settings_for_probe,
+                    gpus: &gpus,
+                    force_software: env.force_software_encoder,
+                });
+                if settings_for_probe.failed_probe_keys != settings_snapshot.failed_probe_keys {
+                    let settings_persist = settings.clone();
+                    let to_save = settings_for_probe.clone();
+                    tokio::spawn(async move {
+                        let mut w = settings_persist.write().await;
+                        *w = to_save;
+                        let disk = w.clone();
+                        drop(w);
+                        let _ = tokio::task::spawn_blocking(move || {
+                            save_host_settings_to_disk(&disk);
+                        })
+                        .await;
+                    });
+                }
+            }
+        }
 
         if manual_encoder_lock {
             info!(preferred = ?preferred, "manual encoder lock: no HW fallback after preferred");

@@ -79,6 +79,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var logText: TextView
     private lateinit var topPanel: LinearLayout
+    private lateinit var setupScroll: ScrollView
     private lateinit var streamSurface: SurfaceView
     private lateinit var streamContainer: FrameLayout
     private lateinit var hudText: TextView
@@ -187,6 +188,7 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         logText = findViewById(R.id.logText)
         topPanel = findViewById(R.id.topPanel)
+        setupScroll = findViewById(R.id.setupScroll)
         streamSurface = findViewById(R.id.streamSurface)
         streamContainer = findViewById(R.id.streamContainer)
         hudText = findViewById(R.id.hudText)
@@ -212,7 +214,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-                if (lastPicW > 0) applyVideoTransform()
+                applyVideoTransform()
             }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -231,6 +233,12 @@ class MainActivity : AppCompatActivity() {
         // If SurfaceView was already created before callback registration,
         // bind it immediately to avoid getting stuck waiting forever.
         ensureSurfaceReady()
+
+        streamContainer.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            if (connected && surfaceReady) {
+                applyVideoTransform()
+            }
+        }
 
         streamSurface.setOnTouchListener { _, event ->
             if (!connected) {
@@ -283,6 +291,7 @@ class MainActivity : AppCompatActivity() {
     private fun startH264Stream() {
         clearStreamSurface()
         streamContainer.visibility = View.VISIBLE
+        setupScroll.visibility = View.GONE
         logScroll.visibility = View.GONE
         topPanel.visibility = View.GONE
         hudText.visibility = if (hudEnabled) View.VISIBLE else View.GONE
@@ -471,6 +480,7 @@ class MainActivity : AppCompatActivity() {
     private fun stopVisualStreamingState() {
         clearStreamSurface()
         streamContainer.visibility = View.GONE
+        setupScroll.visibility = View.VISIBLE
         logScroll.visibility = View.VISIBLE
         topPanel.visibility = View.VISIBLE
         setImmersiveMode(false)
@@ -559,12 +569,22 @@ class MainActivity : AppCompatActivity() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        // Screen rotated — close the current stream so surfaceDestroyed/surfaceCreated
-        // fires and restarts it with the new screen dimensions.
-        if (connected && streamSocket != null) {
-            streamSocket?.close(1000, "orientation change")
-            streamSocket = null
-            pendingStreamStart = true
+        if (!connected) {
+            return
+        }
+        lastPicW = 0
+        lastPicH = 0
+        lastBufW = 0
+        lastBufH = 0
+        lastCropL = 0
+        lastCropT = 0
+        streamSocket?.close(1000, "orientation change")
+        streamSocket = null
+        pendingStreamStart = true
+        streamContainer.post {
+            if (connected && pendingStreamStart) {
+                maybeStartPendingStream("Orientation changed, restarting stream...")
+            }
         }
     }
 
@@ -939,6 +959,7 @@ class MainActivity : AppCompatActivity() {
                     2 -> {
                         if (connected) {
                             streamContainer.visibility = View.GONE
+                            setupScroll.visibility = View.VISIBLE
                             logScroll.visibility = View.VISIBLE
                             topPanel.visibility = View.VISIBLE
                             setImmersiveMode(false)

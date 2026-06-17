@@ -161,6 +161,8 @@ pub fn load_host_settings_from_disk() -> HostSettings {
             cache.capture = "ddagrab".to_string();
         }
     }
+    let gpu_count = crate::encoder::detect_gpus().len() as u32;
+    sanitize_probe_state(&mut settings, gpu_count);
     settings
 }
 
@@ -182,4 +184,88 @@ pub fn probe_cache_key(
         .or_else(|| amf_device.map(|d| format!("amf{d}")))
         .unwrap_or_else(|| "default".to_string());
     format!("{encoder}/{capture}/{gpu}")
+}
+
+fn probe_key_gpu_index(key: &str) -> Option<u32> {
+    key.rsplit('/').next()?.strip_prefix("gpu")?.parse().ok()
+}
+
+/// Drop invalid GPU indices and stale blacklists that block every probe path.
+pub fn sanitize_probe_state(settings: &mut HostSettings, gpu_count: u32) {
+    let max_gpu = gpu_count.max(1);
+    if let Some(g) = settings.preferred_nvenc_gpu {
+        if g >= max_gpu {
+            settings.preferred_nvenc_gpu = None;
+        }
+    }
+    settings
+        .failed_probe_keys
+        .retain(|k| probe_key_gpu_index(k).is_none_or(|idx| idx < max_gpu));
+
+    if let Some(enc) = settings.preferred_encoder.clone() {
+        if encoder_failures_block_all(&settings.failed_probe_keys, &enc, max_gpu) {
+            clear_encoder_probe_failures(settings, &enc);
+        }
+    }
+}
+
+pub fn encoder_failures_block_all(failed: &[String], encoder: &str, gpu_count: u32) -> bool {
+    let prefix = format!("{encoder}/");
+    if failed.iter().any(|k| k.starts_with(&prefix)) && failed.len() >= 4 {
+        // Heuristic: if we have many failures for one encoder, the list is likely stale.
+        let capture_backends = ["ddagrab", "gdigrab"];
+        let mut expected = 0usize;
+        for cap in capture_backends {
+            for gpu in 0..gpu_count.max(1) {
+                expected += 1;
+                let key = probe_cache_key(encoder, cap, Some(gpu), None);
+                if !failed.contains(&key) {
+                    return false;
+                }
+            }
+            expected += 1;
+            let key = probe_cache_key(encoder, cap, None, None);
+            if !failed.contains(&key) {
+                return false;
+            }
+        }
+        return expected > 0;
+    }
+    false
+}
+
+pub fn clear_encoder_probe_failures(settings: &mut HostSettings, encoder: &str) {
+    let prefix = format!("{encoder}/");
+    settings
+        .failed_probe_keys
+        .retain(|k| !k.starts_with(&prefix));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clears_stale_nvenc_blacklist() {
+        let mut settings = HostSettings {
+            preferred_encoder: Some("h264_nvenc".into()),
+            preferred_nvenc_gpu: Some(3),
+            failed_probe_keys: vec![
+                "h264_nvenc/ddagrab/gpu0".into(),
+                "h264_nvenc/ddagrab/gpu1".into(),
+                "h264_nvenc/ddagrab/gpu2".into(),
+                "h264_nvenc/ddagrab/gpu3".into(),
+                "h264_nvenc/ddagrab/default".into(),
+                "h264_nvenc/gdigrab/gpu0".into(),
+                "h264_nvenc/gdigrab/gpu1".into(),
+                "h264_nvenc/gdigrab/gpu2".into(),
+                "h264_nvenc/gdigrab/gpu3".into(),
+                "h264_nvenc/gdigrab/default".into(),
+            ],
+            ..Default::default()
+        };
+        sanitize_probe_state(&mut settings, 2);
+        assert!(settings.preferred_nvenc_gpu.is_none());
+        assert!(settings.failed_probe_keys.is_empty());
+    }
 }

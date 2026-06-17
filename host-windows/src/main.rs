@@ -1,6 +1,12 @@
+﻿#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 mod capture;
 mod encoder;
 mod ffmpeg;
+mod gui;
 mod input;
 mod profile;
 mod settings;
@@ -44,215 +50,54 @@ fn logo_png_bytes() -> &'static [u8] {
     ]
 }
 
-fn host_gui_html() -> &'static str {
-    r#"<!doctype html>
-<html lang="es">
-<head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>FlexDisplay Host Control</title>
-    <style>
-        :root {
-            --deep-blue:#2A4B8A;
-            --vibrant-orange:#F78C00;
-            --aqua-cyan:#2EC4B6;
-            --panel:#F3F3F3;
-            --text:#3A3A3A;
-            --muted:#647085;
-            --line:#E0E0E0;
-            --ok:#11845B;
-            --warn:#B02A37;
-        }
-        body { margin:0; font-family:Roboto, "Segoe UI", Tahoma, sans-serif; color:var(--text);
-            background:
-                radial-gradient(980px 420px at 8% 0%, rgba(42,75,138,.35) 0%, transparent 62%),
-                radial-gradient(820px 360px at 80% 0%, rgba(247,140,0,.18) 0%, transparent 64%),
-                radial-gradient(920px 420px at 95% 100%, rgba(46,196,182,.25) 0%, transparent 60%),
-                linear-gradient(145deg, #f8fafc, #eef2f7);
-            min-height:100vh; display:flex; align-items:center; justify-content:center; }
-        .card { width:min(820px, 95vw); background:var(--panel); border-radius:22px; padding:24px;
-            border:1px solid #fff;
-            border-top:4px solid var(--aqua-cyan);
-            box-shadow:0 26px 70px rgba(37,58,96,.16); }
-        .brand { display:flex; align-items:center; gap:14px; margin-bottom:12px; }
-        .brand img { width:56px; height:56px; border-radius:14px; box-shadow:0 8px 18px rgba(42,75,138,.25); }
-        h1 { margin:0 0 3px; font-size:28px; color:#223252; }
-        .sub { color:var(--muted); margin:0 0 18px; }
-        .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-        .row { display:flex; flex-direction:column; gap:6px; }
-        label { font-size:13px; color:#52627e; font-weight:600; }
-        select, button { border-radius:12px; border:1px solid #c8d1df; padding:10px 11px; font-size:14px; }
-        select {
-            background:linear-gradient(180deg, #ffffff, #f7fbff);
-            border-color:#bcd0ec;
-            color:#25344f;
-        }
-        select:focus { outline:2px solid rgba(46,196,182,.35); border-color:var(--aqua-cyan); }
-        .preset-meta {
-            margin-top:10px;
-            border-radius:12px;
-            border:1px solid #dbe4f2;
-            background:linear-gradient(145deg, #ffffff, #eef5ff);
-            padding:10px 12px;
-            font-size:13px;
-            color:#314665;
-        }
-        button { color:#fff; border:none; font-weight:700; cursor:pointer; letter-spacing:.2px; }
-        #save { background:linear-gradient(145deg, var(--vibrant-orange), #e57400); }
-        #refresh { background:linear-gradient(145deg, var(--aqua-cyan), #1ea69a); }
-        button:hover { filter:brightness(1.05); transform:translateY(-1px); }
-        .status { margin-top:14px; min-height:20px; font-weight:600; opacity:0; transition:opacity .2s ease; }
-        .status.visible { opacity:1; }
-        .status.busy { color:var(--muted); }
-        .status.ok { color:var(--ok); }
-        .status.error { color:var(--warn); }
-        .hint { margin-top:10px; font-size:13px; color:var(--muted); }
-        .actions { margin-top:14px; display:flex; gap:8px; }
-        @media (max-width: 720px) { .grid { grid-template-columns:1fr; } }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div class="brand">
-            <img src="/brand/logo.png" alt="FlexDisplay logo" />
-            <div>
-                <h1>FlexDisplay Host</h1>
-                <div class="sub">Control encoder, GPU and quality profile with immediate apply.</div>
-            </div>
-        </div>
-        <div class="grid">
-            <div class="row">
-                <label for="encoder">Preferred encoder</label>
-                <select id="encoder"></select>
-            </div>
-            <div class="row">
-                <label for="gpu">Preferred GPU adapter (optional)</label>
-                <select id="gpu"></select>
-            </div>
-            <div class="row" style="grid-column:span 2;">
-                <label for="preset">Quality profile</label>
-                <select id="preset"></select>
-                <div id="presetMeta" class="preset-meta"></div>
-            </div>
-        </div>
-        <div class="actions">
-            <button id="save">Save and apply</button>
-            <button id="refresh">Reload detection</button>
-        </div>
-        <div id="status" class="status"></div>
-        <div class="hint">Save locks the selected encoder (no automatic HW fallback). Reload detection refreshes vendor-filtered encoders and GPUs.</div>
-    </div>
-<script>
-let statusTimer = null;
-let presetDefs = [];
+#[derive(Clone, Debug, serde::Serialize)]
+struct HostStatus {
+    listen_host: String,
+    port: u16,
+    mode: String,
+    lan_ip: Option<String>,
+    adb_device_connected: bool,
+}
 
-function setStatus(message, kind = 'ok', autoClearMs = 0){
-    const el = document.getElementById('status');
-    if (!el) return;
-    if (statusTimer) {
-        clearTimeout(statusTimer);
-        statusTimer = null;
+fn detect_lan_ipv4() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let ps = r#"(Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
+            $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254*' -and
+            $_.InterfaceAlias -notmatch 'Loopback|vEthernet|Virtual|Hyper-V|VPN|Tailscale'
+        } | Sort-Object InterfaceMetric | Select-Object -First 1 -ExpandProperty IPAddress)"#;
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", ps])
+            .output()
+            .ok()?;
+        let ip = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if ip.is_empty() || ip.contains(' ') {
+            return None;
+        }
+        Some(ip)
     }
-    el.className = 'status visible ' + kind;
-    el.textContent = message;
-    if (autoClearMs > 0) {
-        statusTimer = setTimeout(() => {
-            el.textContent = '';
-            el.className = 'status';
-            statusTimer = null;
-        }, autoClearMs);
+    #[cfg(not(windows))]
+    {
+        None
     }
 }
 
-async function loadAll(){
-    const [capRes, setRes] = await Promise.all([fetch('/api/capabilities'), fetch('/api/settings')]);
-    const cap = await capRes.json();
-    const set = await setRes.json();
-
-    const enc = document.getElementById('encoder');
-    enc.innerHTML = '';
-    const auto = document.createElement('option'); auto.value=''; auto.textContent='auto'; enc.appendChild(auto);
-    (cap.encoders || []).forEach(e => { const o=document.createElement('option'); o.value=e; o.textContent=e; enc.appendChild(o); });
-    enc.value = set.preferred_encoder || '';
-
-    const gpu = document.getElementById('gpu');
-    gpu.innerHTML = '';
-    const ga = document.createElement('option'); ga.value=''; ga.textContent='auto'; gpu.appendChild(ga);
-    (cap.gpus || []).forEach(g => {
-        const o=document.createElement('option');
-        o.value=String(g.index);
-        o.textContent=`#${g.index} - ${g.name}${g.driver_version ? ' (' + g.driver_version + ')' : ''}`;
-        gpu.appendChild(o);
-    });
-    const gpuPref = set.preferred_nvenc_gpu ?? set.preferred_amf_device ?? '';
-    gpu.value = gpuPref === '' ? '' : String(gpuPref);
-
-    const preset = document.getElementById('preset');
-    preset.innerHTML = '';
-    presetDefs = [
-        { value: '',            label: 'Automatic (recommended)', detail: 'Adapts to tablet and link: USB up to 1920×1200@60, Wi-Fi up to 1280×720@30. Encoder caps apply automatically.' },
-        { value: 'cpu_safe',    label: 'Low — 960×544 / 30 fps / 5 Mbps', detail: 'For weak PCs or software encoding (e.g. libx264, RX 550). Lower CPU and bandwidth use.' },
-        { value: 'equilibrado', label: 'Balanced — 1280×720 / 60 fps / 10 Mbps', detail: 'Fixed 720p profile when you want more control than automatic mode.' },
-        { value: 'full_hd',     label: 'High — 1920×1080 / 60 fps / 25 Mbps', detail: 'Fixed 1080p for strong GPUs and USB. Requires a capable hardware encoder.' },
-    ];
-    presetDefs.forEach(p => { const o=document.createElement('option'); o.value=p.value; o.textContent=p.label; preset.appendChild(o); });
-    preset.value = set.preferred_preset || '';
-    renderPresetMeta();
-}
-
-function renderPresetMeta(){
-    const preset = document.getElementById('preset');
-    const meta = document.getElementById('presetMeta');
-    const selected = presetDefs.find(p => p.value === preset.value) || presetDefs[0];
-    if (!meta || !selected) return;
-    meta.textContent = selected.detail;
-}
-
-async function save(){
-    const saveBtn = document.getElementById('save');
-    saveBtn.disabled = true;
-    setStatus('Saving configuration...', 'busy');
-    const gpuVal = document.getElementById('gpu').value;
-    const encVal = document.getElementById('encoder').value || null;
-    const payload = {
-        preferred_encoder: encVal,
-        preferred_amf_device: (encVal === 'h264_amf' && gpuVal !== '') ? Number(gpuVal) : null,
-        preferred_nvenc_gpu: (encVal === 'h264_nvenc' && gpuVal !== '') ? Number(gpuVal) : null,
-        preferred_preset: document.getElementById('preset').value || null,
-        preferred_width: null,
-        preferred_height: null,
-        preferred_bitrate_kbps: null,
+fn adb_device_connected() -> bool {
+    let adb = adb_exe();
+    let out = std::process::Command::new(&adb).args(["devices"]).output();
+    let Ok(out) = out else {
+        return false;
     };
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    try {
-        const res = await fetch('/api/settings', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-        });
-        if (res.ok) {
-            await loadAll();
-            setStatus('Configuration saved and applied', 'ok', 2600);
-        } else {
-            setStatus('Could not save settings', 'error', 5000);
-        }
-    } catch (_e) {
-        setStatus('Timed out while saving', 'error', 5000);
-    } finally {
-        clearTimeout(timeoutId);
-        saveBtn.disabled = false;
+    if !out.status.success() {
+        return false;
     }
-}
-
-document.getElementById('save').addEventListener('click', save);
-document.getElementById('refresh').addEventListener('click', loadAll);
-document.getElementById('preset').addEventListener('change', renderPresetMeta);
-loadAll();
-</script>
-</body>
-</html>"#
+    for line in String::from_utf8_lossy(&out.stdout).lines().skip(1) {
+        let trimmed = line.trim();
+        if trimmed.ends_with("\tdevice") || trimmed.ends_with(" device") {
+            return true;
+        }
+    }
+    false
 }
 
 fn maybe_open_gui(
@@ -280,6 +125,8 @@ fn maybe_open_gui(
     let edge_paths = [
         "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
         "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
     ];
     for edge in edge_paths {
         if std::path::Path::new(edge).exists() {
@@ -377,7 +224,24 @@ async fn main() -> anyhow::Result<()> {
 
     let ui_route = warp::path::end()
         .and(warp::get())
-        .map(|| warp::reply::html(host_gui_html()));
+        .map(|| warp::reply::html(gui::host_gui_html()));
+
+    let status_env = env_config.clone();
+    let status_route = warp::path!("api" / "status").and(warp::get()).map(move || {
+        let listen = status_env.listen_host.clone();
+        let mode = if listen == "127.0.0.1" || listen == "localhost" {
+            "usb"
+        } else {
+            "wifi"
+        };
+        warp::reply::json(&HostStatus {
+            listen_host: listen,
+            port: status_env.port,
+            mode: mode.to_string(),
+            lan_ip: detect_lan_ipv4(),
+            adb_device_connected: adb_device_connected(),
+        })
+    });
 
     let logo_route = warp::path!("brand" / "logo.png").and(warp::get()).map(|| {
         warp::http::Response::builder()
@@ -490,7 +354,7 @@ async fn main() -> anyhow::Result<()> {
             .output()
         {
             Ok(out) if out.status.success() => {
-                info!(port = listen_port, "adb reverse OK — USB mode active");
+                info!(port = listen_port, "adb reverse OK â€” USB mode active");
             }
             Ok(out) => {
                 let msg = String::from_utf8_lossy(&out.stderr);
@@ -512,6 +376,7 @@ async fn main() -> anyhow::Result<()> {
         == Some("1");
 
     let routes = ui_route
+        .or(status_route)
         .or(logo_route)
         .or(health)
         .or(capabilities_route)

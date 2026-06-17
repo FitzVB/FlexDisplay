@@ -1,5 +1,25 @@
 # FlexDisplay - Wi-Fi Mode Startup
 
+param(
+    [switch]$Silent = $false
+)
+
+$root = Split-Path -Parent $PSScriptRoot
+if ($Silent) {
+    $logDir = Join-Path $root "logs"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $script:LogFile = Join-Path $logDir "flexdisplay-start.log"
+    function Write-Host {
+        param(
+            [Parameter(Position = 0)][object]$Object,
+            [switch]$NoNewline
+        )
+        if ($null -ne $Object) {
+            Add-Content -LiteralPath $script:LogFile -Value ([string]$Object)
+        }
+    }
+}
+
 Write-Host ""
 Write-Host "FlexDisplay - Wi-Fi Mode Startup" -ForegroundColor Cyan
 Write-Host "====================================" -ForegroundColor Cyan

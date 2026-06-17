@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.FlexDisplay" parent="Theme.AppCompat.Light.NoActionBar">
-        <item name="colorPrimary">@color/fd_deep_blue</item>
-        <item name="colorPrimaryDark">@color/fd_deep_blue_dark</item>
-        <item name="colorAccent">@color/fd_aqua_cyan</item>
+    <style name="Theme.FlexDisplay" parent="Theme.AppCompat.NoActionBar">
+        <item name="colorPrimary">@color/fd_cyan</item>
+        <item name="colorPrimaryDark">@color/fd_bg_0</item>
+        <item name="colorAccent">@color/fd_cyan</item>
+        <item name="android:statusBarColor">@color/fd_bg_0</item>
+        <item name="android:navigationBarColor">@color/fd_bg_0</item>
+        <item name="android:windowLightStatusBar">false</item>
         <!-- Transparent window background: lets SurfaceView render in its own hardware
              overlay layer (below the window) without being covered by the theme color.
              This allows normal View overlays (HUD TextView) to work above the video

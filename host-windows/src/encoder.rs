@@ -304,7 +304,14 @@ pub fn build_encoder_candidates(opts: &CandidateBuildOptions<'_>) -> Vec<Encoder
             add_encoder(&mut candidates, pref);
         }
         if opts.manual_encoder_lock {
-            return dedupe_candidates(filter_failed(candidates));
+            let filtered = dedupe_candidates(filter_failed(candidates));
+            if filtered.is_empty() {
+                tracing::warn!(
+                    encoder = %pref,
+                    "preferred encoder had zero candidates after failure filter"
+                );
+            }
+            return filtered;
         }
     }
 

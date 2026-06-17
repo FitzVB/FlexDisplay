@@ -250,9 +250,13 @@ function Copy-RequiredFiles {
 
     Copy-Item (Join-Path $RepoRoot "START.bat") (Join-Path $DistRoot "START.bat") -Force
     Copy-Item (Join-Path $RepoRoot "STOP.bat") (Join-Path $DistRoot "STOP.bat") -Force
+    Copy-Item (Join-Path $RepoRoot "WIFI.bat") (Join-Path $DistRoot "WIFI.bat") -Force
+    Copy-Item (Join-Path $RepoRoot "FlexDisplay.vbs") (Join-Path $DistRoot "FlexDisplay.vbs") -Force
+    Copy-Item (Join-Path $RepoRoot "FlexDisplay-WiFi.vbs") (Join-Path $DistRoot "FlexDisplay-WiFi.vbs") -Force
 
     $scriptFiles = @(
         "launcher.ps1",
+        "start-app.ps1",
         "ensure-runtime.ps1",
         "runtime-env.ps1",
         "start-usb.ps1",
@@ -287,11 +291,14 @@ function Copy-RequiredFiles {
     $quick = @"
 FlexDisplay - Quick Start
 
-1. Double-click START.bat
+1. Double-click START.bat (USB mode, no console window)
+   - Or WIFI.bat for wireless mode on the same LAN
 2. On first run, ADB and FFmpeg download automatically (internet required once)
-3. Select USB or Wi-Fi mode
-4. In USB mode the app is auto-installed when an Android device is connected
-5. To stop: close the host window or double-click STOP.bat
+3. The host control panel opens as a desktop app (Edge/Chrome)
+4. In USB mode the Android app is auto-installed when a device is connected
+5. To stop: close the control panel window or double-click STOP.bat
+
+Logs (if needed): logs/flexdisplay-start.log
 
 Extended display (optional):
   Install the Virtual Display Driver from:
