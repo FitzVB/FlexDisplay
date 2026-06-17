@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-06-17
+
+### Fixed
+- **Config panel not opening**: startup splash closed before launching Edge/Chrome; browser starts visibly instead of hidden `wscript` after WinForms splash.
+
+### Changed
+- **Encoder tips**: GUI, HUD, and release notes refer to hardware encoders in general (NVENC, AMF, QSV), not only NVIDIA.
+
+---
+
 ## [0.2.2] - 2026-06-17
 
 ### Fixed
@@ -13,7 +23,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **Logcat capture**: detached `adb logcat` process (no `Start-Job` that died when the launcher exited); fixed `Start-Process` flags.
 - **Portable ADB**: `Resolve-AdbPath` and host `adb_exe()` prefer `.runtime\adb\platform-tools\adb.exe` from the package folder.
 - **CPU preset caps**: `libx264` + named presets no longer always force 30 fps / 1280×704; `full_hd` on CPU caps to 720p60 on USB with HUD note; `equilibrado` allows 720p60 on USB.
-- **NVENC latency**: tighter NVENC VBV buffer (`bufsize = bitrate/12`) for lower glass-to-glass delay.
+- **Hardware encoder latency**: tighter VBV buffer on GPU encoders (`bufsize = bitrate/12`) for lower glass-to-glass delay.
 
 ### Added
 - **Startup progress window**: silent `START.bat` launches show a small dark splash with progress bar and status text (downloads, USB setup, APK install, server start) so first-run does not look frozen.

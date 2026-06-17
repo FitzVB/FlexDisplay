@@ -158,12 +158,6 @@ function Open-FlexDisplayGui {
         [int]$Port = 9001
     )
 
-    $openGuiVbs = Join-Path $Root 'FlexDisplay-OpenGui.vbs'
-    if (Test-Path -LiteralPath $openGuiVbs) {
-        Start-Process wscript.exe -ArgumentList @('//B', $openGuiVbs) -WindowStyle Hidden | Out-Null
-        return [PSCustomObject]@{ Launched = $true; Port = $Port }
-    }
-
     $url = "http://${HostIp}:${Port}"
     $candidates = @(
         (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'),
@@ -174,8 +168,15 @@ function Open-FlexDisplayGui {
 
     foreach ($browser in $candidates) {
         if (Test-Path -LiteralPath $browser) {
-            return Start-Process -FilePath $browser -ArgumentList "--app=$url" -PassThru
+            Start-Process -FilePath $browser -ArgumentList "--app=$url" -WindowStyle Normal | Out-Null
+            return [PSCustomObject]@{ Launched = $true; Port = $Port; Browser = $browser }
         }
+    }
+
+    $openGuiVbs = Join-Path $Root 'FlexDisplay-OpenGui.vbs'
+    if (Test-Path -LiteralPath $openGuiVbs) {
+        Start-Process wscript.exe -ArgumentList @('//B', $openGuiVbs) | Out-Null
+        return [PSCustomObject]@{ Launched = $true; Port = $Port }
     }
 
     Start-Process $url | Out-Null

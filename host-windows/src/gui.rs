@@ -231,9 +231,9 @@ function renderPresetMeta(){
     let detail = selected.detail;
     const encVal = enc ? enc.value : '';
     if (selected.value === 'full_hd' && encVal === 'libx264') {
-        detail += ' CPU encoding cannot reach 1080p60 — use NVENC or Automatic for full resolution.';
+        detail += ' Software (CPU) encoding cannot reach 1080p60 — use Automatic or a hardware encoder (NVIDIA NVENC, AMD AMF, Intel QSV).';
     } else if (selected.value === 'full_hd' && encVal === '') {
-        detail += ' Uses hardware encoding when available.';
+        detail += ' Uses hardware encoding when your GPU supports it.';
     }
     meta.textContent = detail;
 }

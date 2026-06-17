@@ -64,16 +64,20 @@ try {
 
     Update-FlexDisplayStartupProgress -Percent 92 -Message 'Abriendo panel de control...'
     Add-Content -Path $launcherLog -Value "[*] Opening desktop control panel" -ErrorAction SilentlyContinue
+
+    # Close splash before launching the browser — TopMost splash can hide Edge/Chrome app mode.
+    Stop-FlexDisplayStartupSplash
+    Start-Sleep -Milliseconds 500
+
     $guiProc = Open-FlexDisplayGui -Root $root -HostIp '127.0.0.1' -Port $port
     if (-not $guiProc) {
         Add-Content -Path $launcherLog -Value "[WARN] Could not open Edge/Chrome app window; browse http://127.0.0.1:$port manually" -ErrorAction SilentlyContinue
-        Update-FlexDisplayStartupProgress -Message 'Abre http://127.0.0.1:9001 en el navegador' -Error
-        Start-Sleep -Seconds 3
+        Start-Process "http://127.0.0.1:$port" -ErrorAction SilentlyContinue | Out-Null
         exit 0
     }
 
     Add-Content -Path $launcherLog -Value "[OK] Desktop control panel launched" -ErrorAction SilentlyContinue
-    Complete-FlexDisplayStartupSplash
+    Start-Sleep -Seconds 2
     exit 0
 }
 catch {
@@ -83,5 +87,7 @@ catch {
     exit 1
 }
 finally {
-    Stop-FlexDisplayStartupSplash
+    if ($global:FlexDisplaySplashActive) {
+        Stop-FlexDisplayStartupSplash
+    }
 }
