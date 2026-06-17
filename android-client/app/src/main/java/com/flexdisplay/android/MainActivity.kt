@@ -61,7 +61,7 @@ class MainActivity : AppCompatActivity() {
         // Decoder tolerance for adaptive profiles up to 1920×1200.
         private const val DECODER_MAX_WIDTH = 1920
         private const val DECODER_MAX_HEIGHT = 1200
-        private const val INPUT_MOVE_SEND_INTERVAL_MS = 8L
+        private const val INPUT_MOVE_SEND_INTERVAL_MS = 4L
         private const val PREFS_NAME = "tablet_monitor_prefs"
         private const val PREF_LANGUAGE = "app_language"
     }

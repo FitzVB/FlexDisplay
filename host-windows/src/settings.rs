@@ -155,6 +155,12 @@ pub fn load_host_settings_from_disk() -> HostSettings {
     {
         settings.preferred_nvenc_gpu = settings.preferred_amf_device;
     }
+    // Prefer DXGI capture for hardware encoders — cached gdigrab caused dup/drop at 1080p60.
+    if let Some(cache) = settings.encoder_probe_cache.as_mut() {
+        if cache.encoder != "libx264" && cache.capture.eq_ignore_ascii_case("gdigrab") {
+            cache.capture = "ddagrab".to_string();
+        }
+    }
     settings
 }
 

@@ -368,6 +368,12 @@ pub fn encoder_extra_args(encoder: &str) -> Vec<String> {
             "1".into(),
             "-level".into(),
             "5.1".into(),
+            "-forced-idr".into(),
+            "0".into(),
+            "-no-scenecut".into(),
+            "1".into(),
+            "-strict_gop".into(),
+            "1".into(),
         ],
         "h264_qsv" => vec![
             "-preset".into(),

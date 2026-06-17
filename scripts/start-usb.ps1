@@ -232,7 +232,7 @@ if ($selectedSerial) {
     Write-Host "[*] Capturing Android logcat -> $logcatFile" -ForegroundColor Cyan
     $logcatJob = Start-Job -ScriptBlock {
         param($adb, $serial, $file)
-        & $adb -s $serial logcat -v time *:W FlexDisplay:V > $file 2>&1
+        & $adb -s $serial logcat -v time *:W H264Decoder:V MainActivity:V > $file 2>&1
     } -ArgumentList $adbPath, $selectedSerial, $logcatFile
 }
 

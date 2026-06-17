@@ -125,17 +125,18 @@ pub async fn stream_with_ffmpeg(
         config.bitrate_kbps
     };
 
-    let bufsize = if config.encoder == "h264_amf" {
-        effective_bitrate_kbps / 2
-    } else {
-        effective_bitrate_kbps / 4
+    let bufsize = match config.encoder.as_str() {
+        "h264_amf" => effective_bitrate_kbps / 2,
+        // Tighter VBV for NVENC — less end-to-end buffering over USB.
+        "h264_nvenc" => effective_bitrate_kbps / 8,
+        _ => effective_bitrate_kbps / 4,
     };
-    let gop = if config.encoder == "h264_amf" {
-        config.fps.clamp(30, 60)
-    } else if config.encoder == "libx264" {
-        config.fps.clamp(15, 30)
-    } else {
-        (config.fps / 2).clamp(15, 30)
+    let gop = match config.encoder.as_str() {
+        "h264_amf" => config.fps.clamp(30, 60),
+        "libx264" => config.fps.clamp(15, 30),
+        // One IDR per second at 60 fps — avoids 150 KB keyframes every 0.5 s.
+        "h264_nvenc" => config.fps.clamp(30, 120),
+        _ => (config.fps / 2).clamp(15, 30),
     };
     args.extend([
         "-g".into(),

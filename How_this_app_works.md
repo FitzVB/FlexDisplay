@@ -101,8 +101,9 @@ This keeps hot profile switching functional while preserving robust mirror geome
 
 Host tries candidates by encoder and capture backend.
 Current stable policy:
-- Mirror mode prefers `Gdigrab` first (coordinate-based, robust for monitor bounds).
-- Extended mode can prioritize `Ddagrab` (DXGI path) unless overridden.
+- Hardware encoders prefer `Ddagrab` (DXGI) first in all modes — lower CPU and fewer duplicated frames at 1080p60.
+- `Gdigrab` remains the fallback when DXGI fails (coordinate-accurate for monitor bounds).
+- Override with `FLEXDISPLAY_CAPTURE=gdigrab` or `ddagrab` when needed.
 
 ### 6.2 DPI awareness (critical mirror fix)
 

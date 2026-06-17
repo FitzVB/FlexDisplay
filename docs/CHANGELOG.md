@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-06-17
+
+### Changed
+- **Capture**: hardware encoders (NVENC/AMF/QSV) now try **DXGI (`ddagrab`) first** in mirror mode; GDI remains fallback.
+- **NVENC tuning**: GOP = 1 s at 60 fps, tighter VBV (`bufsize = bitrate/8`), `-no-scenecut`, `-forced-idr 0`, `-strict_gop 1`.
+- **Android input**: touch→mouse throttle reduced from 8 ms to **4 ms** (250 Hz).
+- **USB logcat**: `start-usb.ps1` filters `H264Decoder` and `MainActivity` tags (was non-existent `FlexDisplay`).
+
+### Fixed
+- **Settings migration**: cached probe combos using `gdigrab` with HW encoders upgrade to `ddagrab` on load.
+
+---
+
 ## [0.1.7] - 2026-06-16
 
 ### Changed
