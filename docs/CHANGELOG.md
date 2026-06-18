@@ -7,6 +7,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [0.2.6] - 2026-06-17
 
+### Fixed
+- **STOP.bat**: now stops `FlexDisplay.exe` (not only `host-windows`), child FFmpeg processes, ADB logcat sidecars, and runs `adb kill-server`.
+
 ### Changed
 - **Latest-frame-wins**: Android decoder drops stale decoded frames and only renders the newest — cuts glass latency when the HW decoder runs ahead.
 - **TCP_NODELAY** on OkHttp WebSockets (input + video) for immediate small-packet send.

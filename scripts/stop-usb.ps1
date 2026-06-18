@@ -2,6 +2,11 @@ $ErrorActionPreference = "SilentlyContinue"
 
 $root = Split-Path -Parent $PSScriptRoot
 
+$commonLib = Join-Path $PSScriptRoot "lib\Common.ps1"
+if (Test-Path $commonLib) {
+    . $commonLib
+}
+
 $runtimeEnv = Join-Path $PSScriptRoot "runtime-env.ps1"
 if (Test-Path $runtimeEnv) {
     . $runtimeEnv -RootPath $root
@@ -20,11 +25,7 @@ function Resolve-AdbPath {
     return $null
 }
 
-$adb = Resolve-AdbPath -Root $root
-if ($adb) {
-    & $adb reverse --remove-all 2>$null | Out-Null
-    Write-Host "ADB reverse removed (all rules)"
-}
+Write-Host "[*] Stopping FlexDisplay..." -ForegroundColor Cyan
 
-Stop-Process -Name "host-windows" -Force -ErrorAction SilentlyContinue
-Write-Host "Host stopped."
+$adb = Resolve-AdbPath -Root $root
+Invoke-FlexDisplayCleanup -AdbExe $adb -Port 9001

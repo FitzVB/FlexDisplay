@@ -218,22 +218,43 @@ function Resolve-HostExePath {
     return $null
 }
 
+function Stop-FlexDisplayProcessTree {
+    param([int]$ProcessId)
+
+    if (-not $ProcessId -or $ProcessId -eq $PID) {
+        return
+    }
+
+    Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue |
+        ForEach-Object { Stop-FlexDisplayProcessTree -ProcessId $_.ProcessId }
+
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+}
+
 function Stop-FlexDisplayHost {
     param([int]$Port = 9001)
 
-    Stop-Process -Name "host-windows" -Force -ErrorAction SilentlyContinue
+    foreach ($procName in @('FlexDisplay', 'host-windows')) {
+        Get-Process -Name $procName -ErrorAction SilentlyContinue |
+            ForEach-Object { Stop-FlexDisplayProcessTree -ProcessId $_.Id }
+    }
+
     $portOwners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
         Select-Object -ExpandProperty OwningProcess -Unique
     foreach ($ownerPid in $portOwners) {
-        if ($ownerPid -and $ownerPid -ne $PID) {
-            Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
-        }
+        Stop-FlexDisplayProcessTree -ProcessId $ownerPid
     }
 }
 
 function Stop-FlexDisplayGui {
     Get-CimInstance Win32_Process -Filter "Name='msedge.exe' OR Name='chrome.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -like '*--app=*9001*' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
+function Stop-FlexDisplayAdbSidecars {
+    Get-CimInstance Win32_Process -Filter "Name='adb.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*logcat*' -or $_.CommandLine -like '*reverse*' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
@@ -245,11 +266,22 @@ function Invoke-FlexDisplayCleanup {
 
     Stop-FlexDisplayHost -Port $Port
     Stop-FlexDisplayGui
+    Stop-FlexDisplayAdbSidecars
+
     if ($AdbExe -and (Test-Path $AdbExe)) {
+        & $AdbExe reverse --remove-all 2>$null | Out-Null
         & $AdbExe kill-server 2>$null | Out-Null
     }
+    else {
+        $adbCmd = Get-Command adb -ErrorAction SilentlyContinue
+        if ($adbCmd) {
+            & $adbCmd.Source reverse --remove-all 2>$null | Out-Null
+            & $adbCmd.Source kill-server 2>$null | Out-Null
+        }
+    }
+
     Get-Job | Where-Object { $_.State -eq 'Running' } | Stop-Job -PassThru | Remove-Job -Force -ErrorAction SilentlyContinue
-    Write-Host '[OK] Cleanup done.' -ForegroundColor Green
+    Write-Host '[OK] FlexDisplay host, GUI, and ADB stopped.' -ForegroundColor Green
 }
 
 function Start-FlexDisplayLogcatCapture {
