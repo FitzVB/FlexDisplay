@@ -1,3 +1,4 @@
+use crate::adaptive::PlaybackTuning;
 use crate::capture::Capture;
 use crate::ffmpeg::ffmpeg_exe;
 use crate::settings::{probe_cache_key, HostSettings, ProbeCache};
@@ -354,84 +355,81 @@ pub fn cpu_thread_count() -> u32 {
         .max(1)
 }
 
-/// Per-encoder low-latency arguments.
-pub fn encoder_extra_args(encoder: &str) -> Vec<String> {
+/// Per-encoder arguments tuned for interactive (low latency) or motion (quality) playback.
+pub fn encoder_extra_args(encoder: &str, tuning: PlaybackTuning) -> Vec<String> {
     let sliced_threads = if cpu_thread_count() >= 4 { "1" } else { "0" };
     match encoder {
-        "h264_nvenc" => vec![
-            "-preset".into(),
-            "p1".into(),
-            "-tune".into(),
-            "ll".into(),
-            "-rc".into(),
-            "cbr".into(),
-            "-bf".into(),
-            "0".into(),
-            "-zerolatency".into(),
-            "1".into(),
-            "-rc-lookahead".into(),
-            "0".into(),
-            "-delay".into(),
-            "0".into(),
-            "-profile:v".into(),
-            "main".into(),
-            "-aud".into(),
-            "1".into(),
-            "-level".into(),
-            "5.1".into(),
-            "-forced-idr".into(),
-            "0".into(),
-            "-no-scenecut".into(),
-            "0".into(),
-            "-strict_gop".into(),
-            "0".into(),
-        ],
-        "h264_qsv" => vec![
-            "-preset".into(),
-            "veryfast".into(),
-            "-async_depth".into(),
-            "1".into(),
-            "-look_ahead_depth".into(),
-            "0".into(),
-            "-bf".into(),
-            "0".into(),
-        ],
-        "h264_amf" => vec![
-            "-usage".into(),
-            "lowlatency".into(),
-            "-quality".into(),
-            "balanced".into(),
-            "-latency".into(),
-            "true".into(),
-            "-rc".into(),
-            "cbr".into(),
-            "-async_depth".into(),
-            "1".into(),
-            "-profile".into(),
-            "baseline".into(),
-            "-coder".into(),
-            "cavlc".into(),
-            "-bf".into(),
-            "0".into(),
-            "-max_b_frames".into(),
-            "0".into(),
-            "-vbaq".into(),
-            "true".into(),
-        ],
-        "libx264" => vec![
-            "-preset".into(),
-            "ultrafast".into(),
-            "-tune".into(),
-            "zerolatency".into(),
-            "-profile:v".into(),
-            "baseline".into(),
-            "-level".into(),
-            "5.1".into(),
-            "-x264-params".into(),
-            format!(
-                "bframes=0:scenecut=40:ref=1:cabac=0:rc-lookahead=0:sync-lookahead=0:repeat-headers=1:aud=1:sliced-threads={sliced_threads}"
-            ),
-        ],
+        "h264_nvenc" => match tuning {
+            PlaybackTuning::Interactive => vec![
+                "-preset".into(), "p1".into(), "-tune".into(), "ll".into(), "-rc".into(), "cbr".into(),
+                "-bf".into(), "0".into(), "-zerolatency".into(), "1".into(), "-rc-lookahead".into(), "0".into(),
+                "-delay".into(), "0".into(), "-profile:v".into(), "main".into(), "-aud".into(), "1".into(),
+                "-level".into(), "5.1".into(), "-forced-idr".into(), "0".into(), "-no-scenecut".into(), "0".into(),
+                "-strict_gop".into(), "0".into(),
+            ],
+            PlaybackTuning::Motion => vec![
+                "-preset".into(), "p3".into(), "-tune".into(), "ll".into(), "-rc".into(), "cbr".into(),
+                "-bf".into(), "0".into(), "-zerolatency".into(), "0".into(), "-rc-lookahead".into(), "0".into(),
+                "-delay".into(), "0".into(), "-spatial-aq".into(), "1".into(), "-temporal-aq".into(), "1".into(),
+                "-aq-strength".into(), "8".into(), "-profile:v".into(), "main".into(), "-aud".into(), "1".into(),
+                "-level".into(), "5.1".into(), "-forced-idr".into(), "0".into(), "-no-scenecut".into(), "0".into(),
+                "-strict_gop".into(), "0".into(),
+            ],
+        },
+        "h264_qsv" => match tuning {
+            PlaybackTuning::Interactive => vec![
+                "-preset".into(), "veryfast".into(), "-async_depth".into(), "1".into(),
+                "-look_ahead_depth".into(), "0".into(), "-bf".into(), "0".into(),
+            ],
+            PlaybackTuning::Motion => vec![
+                "-preset".into(), "medium".into(), "-async_depth".into(), "2".into(),
+                "-look_ahead_depth".into(), "0".into(), "-bf".into(), "0".into(),
+            ],
+        },
+        "h264_amf" => match tuning {
+            PlaybackTuning::Interactive => vec![
+                "-usage".into(), "lowlatency".into(), "-quality".into(), "speed".into(), "-latency".into(), "true".into(),
+                "-rc".into(), "cbr".into(), "-async_depth".into(), "1".into(), "-profile".into(), "baseline".into(),
+                "-coder".into(), "cavlc".into(), "-bf".into(), "0".into(), "-max_b_frames".into(), "0".into(),
+                "-vbaq".into(), "false".into(),
+            ],
+            PlaybackTuning::Motion => vec![
+                "-usage".into(), "lowlatency".into(), "-quality".into(), "balanced".into(), "-latency".into(), "true".into(),
+                "-rc".into(), "cbr".into(), "-async_depth".into(), "1".into(), "-profile".into(), "main".into(),
+                "-coder".into(), "cavlc".into(), "-bf".into(), "0".into(), "-max_b_frames".into(), "0".into(),
+                "-vbaq".into(), "true".into(),
+            ],
+        },
+        "libx264" => match tuning {
+            PlaybackTuning::Interactive => vec![
+                "-preset".into(),
+                "ultrafast".into(),
+                "-tune".into(),
+                "zerolatency".into(),
+                "-profile:v".into(),
+                "baseline".into(),
+                "-level".into(),
+                "5.1".into(),
+                "-x264-params".into(),
+                format!(
+                    "bframes=0:scenecut=0:ref=1:cabac=0:rc-lookahead=0:sync-lookahead=0:repeat-headers=1:aud=1:sliced-threads={sliced_threads}"
+                ),
+            ],
+            PlaybackTuning::Motion => vec![
+                "-preset".into(),
+                "veryfast".into(),
+                "-tune".into(),
+                "zerolatency".into(),
+                "-profile:v".into(),
+                "main".into(),
+                "-level".into(),
+                "5.1".into(),
+                "-x264-params".into(),
+                format!(
+                    "bframes=0:scenecut=40:ref=2:cabac=1:rc-lookahead=0:sync-lookahead=0:repeat-headers=1:aud=1:sliced-threads={sliced_threads}"
+                ),
+            ],
+        },
         _ => vec!["-bf".into(), "0".into()],
     }
 }

@@ -1,3 +1,4 @@
+use crate::adaptive::{AdaptiveStreamState, MotionDetector, PlaybackTuning};
 use crate::capture::Capture;
 use crate::latency::StreamLatencyState;
 use crate::profile::TransportKind;
@@ -17,6 +18,7 @@ use warp::ws::Message;
 pub enum StreamExit {
     Streamed,
     RestartRequested,
+    TuningChanged,
     Unavailable,
     SocketClosed,
 }
@@ -34,6 +36,7 @@ pub struct FfmpegConfig {
     pub pre_input_args: Vec<String>,
     pub nvenc_gpu: Option<u32>,
     pub transport: TransportKind,
+    pub playback_tuning: PlaybackTuning,
 }
 
 pub async fn stream_with_ffmpeg(
@@ -42,6 +45,7 @@ pub async fn stream_with_ffmpeg(
     restart_requested: &Arc<std::sync::atomic::AtomicBool>,
     config: FfmpegConfig,
     stream_latency: Arc<StreamLatencyState>,
+    adaptive: Arc<AdaptiveStreamState>,
     amf_settings: Option<Arc<RwLock<HostSettings>>>,
 ) -> anyhow::Result<StreamExit> {
     let mut args: Vec<String> = Vec::new();
@@ -112,7 +116,7 @@ pub async fn stream_with_ffmpeg(
     args.extend(["-vf".into(), vf, "-an".into()]);
     args.extend(["-r".into(), config.fps.to_string()]);
     args.extend(["-c:v".into(), config.encoder.clone()]);
-    args.extend(encoder_extra_args(&config.encoder));
+    args.extend(encoder_extra_args(&config.encoder, config.playback_tuning));
 
     if config.encoder == "h264_nvenc" {
         if let Some(gpu_idx) = config.nvenc_gpu {
@@ -131,20 +135,22 @@ pub async fn stream_with_ffmpeg(
     };
 
     let usb = config.transport == TransportKind::Usb;
-    // Wider VBV absorbs I-frame spikes on scene cuts; /12 caused blocky flashes on video.
-    let bufsize = match config.encoder.as_str() {
-        "h264_nvenc" => effective_bitrate_kbps / if usb { 6 } else { 4 },
-        "h264_amf" => effective_bitrate_kbps / if usb { 6 } else { 4 },
-        "h264_qsv" => effective_bitrate_kbps / if usb { 6 } else { 4 },
-        "libx264" => effective_bitrate_kbps / 4,
-        _ => effective_bitrate_kbps / 4,
+    let tuning = config.playback_tuning;
+    let (bufsize, maxrate_mult) = match tuning {
+        PlaybackTuning::Interactive => match config.encoder.as_str() {
+            "h264_nvenc" => (effective_bitrate_kbps / if usb { 8 } else { 5 }, 1.15),
+            "h264_amf" | "h264_qsv" => (effective_bitrate_kbps / if usb { 8 } else { 5 }, 1.15),
+            "libx264" => (effective_bitrate_kbps / if usb { 6 } else { 4 }, 1.1),
+            _ => (effective_bitrate_kbps / 4, 1.1),
+        },
+        PlaybackTuning::Motion => match config.encoder.as_str() {
+            "h264_nvenc" => (effective_bitrate_kbps / if usb { 4 } else { 3 }, 1.5),
+            "h264_amf" | "h264_qsv" => (effective_bitrate_kbps / if usb { 4 } else { 3 }, 1.45),
+            "libx264" => (effective_bitrate_kbps / 3, 1.35),
+            _ => (effective_bitrate_kbps / 3, 1.35),
+        },
     };
-    let maxrate_kbps = match config.encoder.as_str() {
-        "h264_nvenc" | "h264_amf" | "h264_qsv" => {
-            ((effective_bitrate_kbps as f64) * 1.25).round() as u32
-        }
-        _ => effective_bitrate_kbps,
-    };
+    let maxrate_kbps = ((effective_bitrate_kbps as f64) * maxrate_mult).round() as u32;
     let gop = match config.encoder.as_str() {
         "h264_amf" => config.fps.clamp(15, 120),
         "libx264" => config.fps.clamp(15, 60),
@@ -240,6 +246,9 @@ pub async fn stream_with_ffmpeg(
     let mut buf = vec![0u8; 4 * 1024];
     let mut send_buf = Vec::with_capacity(4 * 1024);
     let mut sent_any = false;
+    let mut motion_detector = MotionDetector::default();
+    let mut last_tuning_check = tokio::time::Instant::now();
+    let active_tuning = config.playback_tuning;
     let probe_deadline =
         tokio::time::Instant::now() + tokio::time::Duration::from_millis(PROBE_TIMEOUT_MS);
 
@@ -263,6 +272,23 @@ pub async fn stream_with_ffmpeg(
         match result {
             Ok(0) => break,
             Ok(n) => {
+                motion_detector.observe_chunk(n);
+                adaptive.set_motion_score(motion_detector.score());
+
+                if sent_any && last_tuning_check.elapsed() >= tokio::time::Duration::from_millis(800)
+                {
+                    last_tuning_check = tokio::time::Instant::now();
+                    let evaluated = adaptive.evaluate_tuning();
+                    if evaluated != active_tuning {
+                        adaptive.set_tuning(evaluated);
+                        let tun_msg = format!("TUN:{}", evaluated.as_str());
+                        let _ = ws_tx.send(Message::text(tun_msg)).await;
+                        info!(?evaluated, motion = motion_detector.score(), "playback tuning changed, restarting encoder");
+                        let _ = child.kill().await;
+                        return Ok(StreamExit::TuningChanged);
+                    }
+                }
+
                 if !sent_any {
                     info!(encoder = %config.encoder, "first H.264 bytes sent to client ({n} bytes)");
                     if config.encoder == "h264_amf" {

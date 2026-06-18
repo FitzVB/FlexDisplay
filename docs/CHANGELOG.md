@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-06-18
+
+### Added
+- **Adaptive playback tuning**: host detects motion from H.264 throughput and client glass latency; switches between `interactive` (low latency) and `motion` (video quality) modes automatically.
+- Client sends `glass_ms`/`dec_ms` in input pings; host replies with active `tuning`; `TUN:` messages update Android decoder without reconnect.
+
+### Changed
+- **Interactive mode**: NVENC p1, tighter VBV, decoder drops backlog >2 frames.
+- **Motion mode**: NVENC p3 + spatial/temporal AQ, wider VBV + 50% maxrate burst, decoder keeps up to 4 frames, collapses backlog only >4.
+
+---
+
 ## [0.2.8] - 2026-06-17
 
 ### Fixed

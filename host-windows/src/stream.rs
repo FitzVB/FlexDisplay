@@ -1,3 +1,4 @@
+use crate::adaptive::AdaptiveStreamState;
 use crate::encoder::{
     build_encoder_candidates, detect_available_h264_encoders, detect_gpus, record_probe_failure,
     record_probe_success, CandidateBuildOptions, EncoderCandidate,
@@ -42,6 +43,7 @@ pub async fn handle_h264_stream(
     mut reload_rx: watch::Receiver<u64>,
     env: crate::settings::EnvConfig,
     stream_latency: Arc<crate::latency::StreamLatencyState>,
+    adaptive_state: Arc<AdaptiveStreamState>,
 ) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let _ = *reload_rx.borrow_and_update();
@@ -68,6 +70,7 @@ pub async fn handle_h264_stream(
 
     let gpus = detect_gpus();
     let available_encoders = detect_available_h264_encoders(&gpus, env.force_software_encoder);
+    let mut sticky_candidate: Option<EncoderCandidate> = None;
 
     while connection_alive.load(Ordering::Relaxed) {
         restart_requested.store(false, Ordering::Relaxed);
@@ -203,16 +206,20 @@ pub async fn handle_h264_stream(
         let mut settings_for_probe = settings_snapshot.clone();
         crate::settings::sanitize_probe_state(&mut settings_for_probe, gpu_count);
 
-        let mut candidates = build_encoder_candidates(&CandidateBuildOptions {
-            available_encoders: &available_encoders,
-            preferred_encoder: preferred.as_deref(),
-            manual_encoder_lock,
-            stream_mode: &stream_mode,
-            capture_env: capture_env_ref,
-            settings: &settings_for_probe,
-            gpus: &gpus,
-            force_software: env.force_software_encoder,
-        });
+        let mut candidates = if let Some(stick) = sticky_candidate.as_ref() {
+            vec![stick.clone()]
+        } else {
+            build_encoder_candidates(&CandidateBuildOptions {
+                available_encoders: &available_encoders,
+                preferred_encoder: preferred.as_deref(),
+                manual_encoder_lock,
+                stream_mode: &stream_mode,
+                capture_env: capture_env_ref,
+                settings: &settings_for_probe,
+                gpus: &gpus,
+                force_software: env.force_software_encoder,
+            })
+        };
 
         if candidates.is_empty() {
             if let Some(ref enc) = preferred {
@@ -266,6 +273,7 @@ pub async fn handle_h264_stream(
 
         let mut started = false;
         let mut winning_candidate: Option<EncoderCandidate> = None;
+        let mut tuning_only_retry = false;
 
         for candidate in &candidates {
             if !connection_alive.load(Ordering::Relaxed) {
@@ -292,9 +300,11 @@ pub async fn handle_h264_stream(
             },
         );
             let (eff_w, eff_h, eff_fps, eff_bitrate) = (eff.w, eff.h, eff.fps, eff.bitrate_kbps);
+            let playback_tuning = adaptive_state.evaluate_tuning();
+            adaptive_state.set_tuning(playback_tuning);
 
             let profile_msg = format!(
-                "CFG:encoder={};capture={};w={};h={};fps={};bitrate_kbps={};profile={};transport={};cpu_limited={}",
+                "CFG:encoder={};capture={};w={};h={};fps={};bitrate_kbps={};profile={};transport={};cpu_limited={};tuning={}",
                 candidate.encoder,
                 candidate.capture,
                 eff_w,
@@ -311,9 +321,10 @@ pub async fn handle_h264_stream(
                     )
                 {
                     1
-                } else {
+                } else                 {
                     0
-                }
+                },
+                playback_tuning.as_str()
             );
             let _ = ws_tx.send(Message::text(profile_msg)).await;
 
@@ -345,8 +356,10 @@ pub async fn handle_h264_stream(
                     pre_input_args: candidate.pre_input_args.clone(),
                     nvenc_gpu: candidate.nvenc_gpu,
                     transport,
+                    playback_tuning,
                 },
                 stream_latency.clone(),
+                adaptive_state.clone(),
                 if candidate.encoder == "h264_amf" {
                     Some(settings.clone())
                 } else {
@@ -419,6 +432,13 @@ pub async fn handle_h264_stream(
                             });
                         }
                         started = true;
+                        sticky_candidate = Some(candidate.clone());
+                        break;
+                    }
+                    StreamExit::TuningChanged => {
+                        started = true;
+                        sticky_candidate = Some(candidate.clone());
+                        tuning_only_retry = true;
                         break;
                     }
                     StreamExit::RestartRequested => {
@@ -474,6 +494,11 @@ pub async fn handle_h264_stream(
 
         if let Some(winner) = winning_candidate {
             info!(encoder = %winner.encoder, capture = %winner.capture, "active stream ended");
+        }
+
+        if tuning_only_retry && connection_alive.load(Ordering::Relaxed) {
+            info!("adaptive tuning changed — restarting encoder with updated profile");
+            continue;
         }
 
         if !connection_alive.load(Ordering::Relaxed) {

@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+mod adaptive;
 mod capture;
 mod encoder;
 mod ffmpeg;
@@ -22,6 +23,7 @@ use settings::{
     load_host_settings_from_disk, save_host_settings_to_disk, EnvConfig, HostSettings,
 };
 use std::sync::Arc;
+use adaptive::AdaptiveStreamState;
 use latency::StreamLatencyState;
 use stream::{handle_h264_stream, StreamQuery};
 use tokio::sync::{watch, RwLock};
@@ -202,8 +204,10 @@ async fn main() -> anyhow::Result<()> {
         .unify();
 
     let stream_latency = Arc::new(StreamLatencyState::default());
+    let adaptive_stream = Arc::new(AdaptiveStreamState::default());
 
     let stream_latency_h264 = stream_latency.clone();
+    let adaptive_h264 = adaptive_stream.clone();
     let h264_route = warp::path("h264")
         .and(warp::ws())
         .and(stream_query_filter)
@@ -213,13 +217,15 @@ async fn main() -> anyhow::Result<()> {
         .map(
             move |ws: warp::ws::Ws, query: StreamQuery, settings, reload_rx, env| {
                 let latency = stream_latency_h264.clone();
+                let adaptive = adaptive_h264.clone();
                 ws.on_upgrade(move |socket| {
-                    handle_h264_stream(socket, query, settings, reload_rx, env, latency)
+                    handle_h264_stream(socket, query, settings, reload_rx, env, latency, adaptive)
                 })
             },
         );
 
     let stream_latency_input = stream_latency.clone();
+    let adaptive_input = adaptive_stream.clone();
     let input_query_filter = warp::query::<InputQuery>()
         .or(warp::any().map(InputQuery::default))
         .unify();
@@ -229,7 +235,8 @@ async fn main() -> anyhow::Result<()> {
         .and(input_query_filter)
         .map(move |ws: warp::ws::Ws, query: InputQuery| {
             let latency = stream_latency_input.clone();
-            ws.on_upgrade(move |socket| handle_input_socket(socket, query, latency))
+            let adaptive = adaptive_input.clone();
+            ws.on_upgrade(move |socket| handle_input_socket(socket, query, latency, adaptive))
         });
 
     let ui_route = warp::path::end()
@@ -421,6 +428,7 @@ async fn handle_input_socket(
     socket: warp::ws::WebSocket,
     query: InputQuery,
     stream_latency: Arc<StreamLatencyState>,
+    adaptive: Arc<AdaptiveStreamState>,
 ) {
     use futures::{SinkExt, StreamExt};
     use tracing::error;
@@ -450,10 +458,21 @@ async fn handle_input_socket(
                 if let Ok(obj) = serde_json::from_str::<serde_json::Value>(text) {
                     if obj.get("type").and_then(|v| v.as_str()) == Some("ping") {
                         let ts_ms = obj.get("ts_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let glass_ms = obj
+                            .get("glass_ms")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32;
+                        let dec_ms = obj
+                            .get("dec_ms")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32;
+                        adaptive.update_client_stats(glass_ms, dec_ms);
+
                         let host_us = latency::host_now_us();
                         let stream_send_us = stream_latency.last_send_us();
+                        let tuning = adaptive.evaluate_tuning().as_str();
                         let pong = format!(
-                            r#"{{"type":"pong","ts_ms":{ts_ms},"host_us":{host_us},"stream_send_us":{stream_send_us}}}"#
+                            r#"{{"type":"pong","ts_ms":{ts_ms},"host_us":{host_us},"stream_send_us":{stream_send_us},"tuning":"{tuning}"}}"#
                         );
                         let _ = ws_tx.send(warp::ws::Message::text(pong)).await;
                         continue;

@@ -110,6 +110,7 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var inputRttMs = -1L
     @Volatile private var activeStreamProfile = ""
     @Volatile private var streamRestartRequested = false
+    @Volatile private var playbackTuning = "interactive"
 
     // Dimensions used to configure the active decoder (set from requestedW/H in startH264Stream).
     private var decoderTargetW = DECODER_MAX_WIDTH
@@ -125,7 +126,11 @@ class MainActivity : AppCompatActivity() {
             val socket = inputSocket ?: return
             if (!connected) return
             val tsMs = System.currentTimeMillis()
-            socket.send("""{"type":"ping","ts_ms":$tsMs}""")
+            val glassMs = if (emaGlassMs >= 1f) emaGlassMs.toLong() else -1L
+            val decMs = synchronized(decoderLock) { decoder?.lastDecodeLatencyMs() ?: -1L }
+            socket.send(
+                """{"type":"ping","ts_ms":$tsMs,"glass_ms":$glassMs,"dec_ms":$decMs}"""
+            )
             reconnectHandler.postDelayed(this, 500L)
         }
     }
@@ -162,6 +167,24 @@ class MainActivity : AppCompatActivity() {
                     else alpha * glassSample + (1f - alpha) * emaGlassMs
             }
         }
+
+        val tuning = obj.optString("tuning", "")
+        if (tuning.isNotBlank()) {
+            applyPlaybackTuning(tuning)
+        }
+    }
+
+    private fun applyPlaybackTuning(mode: String) {
+        val normalized = when (mode.lowercase()) {
+            "motion", "video", "smooth" -> "motion"
+            else -> "interactive"
+        }
+        if (normalized == playbackTuning) return
+        playbackTuning = normalized
+        synchronized(decoderLock) {
+            decoder?.setPlaybackTuning(normalized)
+        }
+        runOnUiThread { appendLog("Playback tuning: $normalized") }
     }
 
     private fun refreshGlassFromLastSend() {
@@ -446,12 +469,19 @@ class MainActivity : AppCompatActivity() {
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (text.startsWith("CFG:")) {
-                    val newProfile = formatHostProfile(text.removePrefix("CFG:"))
+                    val cfgBody = text.removePrefix("CFG:")
+                    val newProfile = formatHostProfile(cfgBody)
                     val changed = newProfile != activeStreamProfile
                     activeStreamProfile = newProfile
+                    parseTuningFromCfg(cfgBody)?.let { applyPlaybackTuning(it) }
                     if (changed) {
                         runOnUiThread { appendLog(getString(R.string.profile_changed_log, activeStreamProfile)) }
                     }
+                    return
+                }
+
+                if (text.startsWith("TUN:")) {
+                    applyPlaybackTuning(text.removePrefix("TUN:"))
                     return
                 }
 
@@ -804,6 +834,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun parseTuningFromCfg(cfg: String): String? {
+        return cfg.split(';')
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("tuning=", ignoreCase = true) }
+            ?.substringAfter('=')
+            ?.trim()
+            ?.ifBlank { null }
+    }
+
     private fun formatHostProfile(cfg: String): String {
         val map = mutableMapOf<String, String>()
         cfg.split(';').forEach { part ->
@@ -836,6 +875,7 @@ class MainActivity : AppCompatActivity() {
         val fps = map["fps"] ?: "?"
         val bitrate = map["bitrate_kbps"] ?: "?"
         val cpuLimited = map["cpu_limited"] == "1"
+        val tuning = map["tuning"] ?: "interactive"
 
         val base = getString(
             R.string.profile_active_format_extended,
@@ -844,7 +884,7 @@ class MainActivity : AppCompatActivity() {
             resolution,
             fps,
             bitrate
-        ) + "  •  $profileMode/$transport"
+        ) + "  •  $profileMode/$transport/$tuning"
 
         return if (cpuLimited) {
             "$base  •  ${getString(R.string.profile_cpu_limited_note)}"
@@ -913,7 +953,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createDecoder(surface: Surface): H264Decoder {
-        return H264Decoder(surface, decoderTargetW, decoderTargetH, decoderTargetFps) { fps, latencyMs, bufW, bufH, picW, picH, cropL, cropT, rxKbps ->
+        return H264Decoder(surface, decoderTargetW, decoderTargetH, decoderTargetFps, playbackTuning) { fps, latencyMs, bufW, bufH, picW, picH, cropL, cropT, rxKbps ->
             runOnUiThread {
                 refreshGlassFromLastSend()
                 val decodeMs = latencyMs
@@ -1127,6 +1167,7 @@ private class H264Decoder(
     private val width: Int,
     private val height: Int,
     private val targetFps: Int,
+    initialTuning: String,
     private val onHudUpdate: (fps: Float, latencyMs: Long, bufW: Int, bufH: Int, picW: Int, picH: Int, cropL: Int, cropT: Int, rxKbps: Long) -> Unit
 ) {
     private val codec: MediaCodec = MediaCodec.createDecoderByType("video/avc")
@@ -1147,9 +1188,10 @@ private class H264Decoder(
     // Queue access units (full frame payloads) instead of individual NAL units.
     // Sending single slices separately can produce green/pink macroblock artifacts
     // on some Android hardware decoders.
-    // Queue depth 3: absorbs bursts on scene cuts without dropping reference P-frames
-    // (depth 1 drop-oldest caused green/pink macroblocks until the next IDR).
-    private val auQueue = java.util.concurrent.ArrayBlockingQueue<ByteArray>(3)
+    // Queue depth 4 max; effective depth depends on playback tuning.
+    private val auQueue = java.util.concurrent.ArrayBlockingQueue<ByteArray>(4)
+    @Volatile private var playbackTuning = initialTuning
+    @Volatile private var lastDecodeLatencyMs = 0L
     private val submitThread = Thread {
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
         while (!Thread.currentThread().isInterrupted) {
@@ -1192,8 +1234,18 @@ private class H264Decoder(
     private var emaLatencyMs = 0f
 
     init {
-        android.util.Log.i("H264Decoder", "Decoder created ${width}x${height}, waiting for SPS+PPS")
+        android.util.Log.i("H264Decoder", "Decoder created ${width}x${height}, tuning=$initialTuning")
     }
+
+    fun setPlaybackTuning(mode: String) {
+        playbackTuning = mode
+    }
+
+    fun lastDecodeLatencyMs(): Long = lastDecodeLatencyMs
+
+    private fun maxAuQueueDepth(): Int = if (playbackTuning == "motion") 4 else 2
+
+    private fun collapseBacklogThreshold(): Int = if (playbackTuning == "motion") 4 else 2
 
     fun feed(chunk: ByteArray) {
         totalBytesReceived += chunk.size
@@ -1289,7 +1341,9 @@ private class H264Decoder(
             return
         }
         if (!auQueue.offer(accessUnit)) {
-            auQueue.poll()
+            while (auQueue.size >= maxAuQueueDepth()) {
+                auQueue.poll()
+            }
             auQueue.offer(accessUnit)
         }
     }
@@ -1440,7 +1494,7 @@ private class H264Decoder(
 
         if (pending.isEmpty()) return
 
-        val toRender = if (pending.size > 2) {
+        val toRender = if (pending.size > collapseBacklogThreshold()) {
             for (i in 0 until pending.size - 1) {
                 codec.releaseOutputBuffer(pending[i].first, false)
             }
@@ -1462,6 +1516,7 @@ private class H264Decoder(
 
         framesRendered++
         hudFrameCount++
+        lastDecodeLatencyMs = pendingLatencyMs
         if (framesRendered <= 5 || framesRendered % 300 == 0) {
             android.util.Log.i("H264Decoder",
                 "Frame #$framesRendered  decode_latency=${pendingLatencyMs}ms backlog=${pending.size}")
