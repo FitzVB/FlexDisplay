@@ -6,7 +6,7 @@ use tracing::info;
 
 pub const HW_ENCODERS: [&str; 3] = ["h264_nvenc", "h264_qsv", "h264_amf"];
 pub const ALL_ENCODERS: [&str; 4] = ["h264_nvenc", "h264_qsv", "h264_amf", "libx264"];
-pub const PROBE_TIMEOUT_MS: u64 = 1500;
+pub const PROBE_TIMEOUT_MS: u64 = 1000;
 pub const MAX_FAILED_PROBE_KEYS: usize = 32;
 
 #[derive(Clone, Debug, Serialize)]
@@ -369,6 +369,10 @@ pub fn encoder_extra_args(encoder: &str) -> Vec<String> {
             "0".into(),
             "-zerolatency".into(),
             "1".into(),
+            "-rc-lookahead".into(),
+            "0".into(),
+            "-delay".into(),
+            "0".into(),
             "-profile:v".into(),
             "main".into(),
             "-aud".into(),

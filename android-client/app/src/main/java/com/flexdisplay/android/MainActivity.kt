@@ -44,6 +44,9 @@ import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.InetAddress
+import java.net.Socket
+import java.net.SocketFactory
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
@@ -61,7 +64,7 @@ class MainActivity : AppCompatActivity() {
         // Decoder tolerance for adaptive profiles up to 1920×1200.
         private const val DECODER_MAX_WIDTH = 1920
         private const val DECODER_MAX_HEIGHT = 1200
-        private const val INPUT_MOVE_SEND_INTERVAL_MS = 2L
+        private const val INPUT_MOVE_SEND_INTERVAL_MS = 1L
         private const val PREFS_NAME = "tablet_monitor_prefs"
         private const val PREF_LANGUAGE = "app_language"
     }
@@ -205,6 +208,7 @@ class MainActivity : AppCompatActivity() {
 
     private val okHttpClient = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
+        .socketFactory(TcpNoDelaySocketFactory())
         .build()
 
     private var connected = false
@@ -1286,9 +1290,9 @@ private class H264Decoder(
         // Block up to 4ms to get an input buffer slot — runs on the dedicated submit
         // thread, not the WebSocket thread, so blocking here is safe and prevents
         // the P-frame drops that caused systematic sub-60fps delivery.
-        val index = codec.dequeueInputBuffer(4000)
+        val index = codec.dequeueInputBuffer(2000)
         if (index < 0) {
-            android.util.Log.w("H264Decoder", "AU dropped — no input buffer in 4ms")
+            android.util.Log.w("H264Decoder", "AU dropped — no input buffer in 2ms")
             return
         }
         val input = codec.getInputBuffer(index) ?: run {
@@ -1366,11 +1370,13 @@ private class H264Decoder(
 
     private fun drainOutput() {
         val info = MediaCodec.BufferInfo()
-        // Block up to 4ms waiting for the next decoded frame — avoids CPU spinning.
-        // When the HW decoder has output ready it returns immediately; if nothing is
-        // ready within 4ms we loop back and block again. Then drain any further
-        // already-decoded frames non-blocking so bursts are fully consumed in one pass.
-        var timeout = 2000L // µs — first call blocks
+        // Block up to 2ms for the next decoded frame, then drain any backlog
+        // non-blocking. Only the newest frame is rendered — older ones are dropped
+        // to cut display latency when the decoder runs ahead of the network.
+        var timeout = 2000L
+        var pendingIndex = -1
+        var pendingLatencyMs = 0L
+
         while (true) {
             when (val outIndex = codec.dequeueOutputBuffer(info, timeout)) {
                 MediaCodec.INFO_TRY_AGAIN_LATER -> break
@@ -1378,9 +1384,6 @@ private class H264Decoder(
                     val fmt = codec.outputFormat
                     val bW = if (fmt.containsKey(MediaFormat.KEY_WIDTH)) fmt.getInteger(MediaFormat.KEY_WIDTH) else -1
                     val bH = if (fmt.containsKey(MediaFormat.KEY_HEIGHT)) fmt.getInteger(MediaFormat.KEY_HEIGHT) else -1
-                    // Some hardware decoders allocate a buffer larger than the picture and
-                    // report the visible region via crop keys. If absent, the full buffer is
-                    // the picture (common on software decoders and stock Qualcomm).
                     val cL = if (fmt.containsKey("crop-left")) fmt.getInteger("crop-left") else 0
                     val cT = if (fmt.containsKey("crop-top")) fmt.getInteger("crop-top") else 0
                     val cR = if (fmt.containsKey("crop-right")) fmt.getInteger("crop-right") else (if (bW > 0) bW - 1 else -1)
@@ -1400,34 +1403,41 @@ private class H264Decoder(
                 @Suppress("DEPRECATION")
                 MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> { /* no-op in API 21+ */ }
                 else -> if (outIndex >= 0) {
-                    framesRendered++
-                    hudFrameCount++
-                    val latencyMs = (System.nanoTime() - info.presentationTimeUs * 1000L) / 1_000_000L
-                    if (framesRendered <= 5 || framesRendered % 300 == 0) {
-                        android.util.Log.i("H264Decoder",
-                            "Frame #$framesRendered  decode_latency=${latencyMs}ms")
+                    if (pendingIndex >= 0) {
+                        codec.releaseOutputBuffer(pendingIndex, false)
                     }
-                    val nowMs = System.currentTimeMillis()
-                    if (nowMs - hudLastMs >= 1000) {
-                        val windowMs = (nowMs - hudLastMs).coerceAtLeast(1)
-                        val bytesDelta = (totalBytesReceived - bytesAtLastHud).coerceAtLeast(0L)
-                        val instantRxKbps = (bytesDelta * 8L * 1000L) / windowMs / 1000L
-                        bytesAtLastHud = totalBytesReceived
-
-                        val instantFps = hudFrameCount * 1000f / windowMs
-                        val alpha = 0.25f
-                        emaFps = if (emaFps < 1f) instantFps else alpha * instantFps + (1f - alpha) * emaFps
-                        emaLatencyMs = if (emaLatencyMs < 1f) latencyMs.toFloat()
-                                       else alpha * latencyMs + (1f - alpha) * emaLatencyMs
-                        onHudUpdate(emaFps, emaLatencyMs.toLong(), bufferWidth, bufferHeight, pictureWidth, pictureHeight, cropLeft, cropTop, instantRxKbps)
-                        hudFrameCount = 0
-                        hudLastMs = nowMs
-                    }
-                    codec.releaseOutputBuffer(outIndex, true)
+                    pendingIndex = outIndex
+                    pendingLatencyMs = (System.nanoTime() - info.presentationTimeUs * 1000L) / 1_000_000L
                 }
             }
-            timeout = 0L // subsequent calls non-blocking — drain any queued-up frames
+            timeout = 0L
         }
+
+        if (pendingIndex < 0) return
+
+        framesRendered++
+        hudFrameCount++
+        if (framesRendered <= 5 || framesRendered % 300 == 0) {
+            android.util.Log.i("H264Decoder",
+                "Frame #$framesRendered  decode_latency=${pendingLatencyMs}ms")
+        }
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - hudLastMs >= 1000) {
+            val windowMs = (nowMs - hudLastMs).coerceAtLeast(1)
+            val bytesDelta = (totalBytesReceived - bytesAtLastHud).coerceAtLeast(0L)
+            val instantRxKbps = (bytesDelta * 8L * 1000L) / windowMs / 1000L
+            bytesAtLastHud = totalBytesReceived
+
+            val instantFps = hudFrameCount * 1000f / windowMs
+            val alpha = 0.25f
+            emaFps = if (emaFps < 1f) instantFps else alpha * instantFps + (1f - alpha) * emaFps
+            emaLatencyMs = if (emaLatencyMs < 1f) pendingLatencyMs.toFloat()
+                           else alpha * pendingLatencyMs + (1f - alpha) * emaLatencyMs
+            onHudUpdate(emaFps, emaLatencyMs.toLong(), bufferWidth, bufferHeight, pictureWidth, pictureHeight, cropLeft, cropTop, instantRxKbps)
+            hudFrameCount = 0
+            hudLastMs = nowMs
+        }
+        codec.releaseOutputBuffer(pendingIndex, true)
     }
 
     fun release() {
@@ -1439,6 +1449,25 @@ private class H264Decoder(
         try { codec.stop() } catch (_: Throwable) { }
         try { codec.release() } catch (_: Throwable) { }
     }
+}
+
+/** Disables Nagle on WebSocket TCP connections — small input packets leave immediately. */
+private class TcpNoDelaySocketFactory(
+    private val delegate: SocketFactory = SocketFactory.getDefault()
+) : SocketFactory() {
+    private fun tune(socket: Socket): Socket {
+        socket.tcpNoDelay = true
+        return socket
+    }
+
+    override fun createSocket(): Socket = tune(delegate.createSocket())
+    override fun createSocket(host: String, port: Int): Socket = tune(delegate.createSocket(host, port))
+    override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket =
+        tune(delegate.createSocket(host, port, localHost, localPort))
+    override fun createSocket(address: InetAddress, port: Int): Socket =
+        tune(delegate.createSocket(address, port))
+    override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): Socket =
+        tune(delegate.createSocket(address, port, localAddress, localPort))
 }
 
 private class AnnexBParser(private val onNal: (ByteArray) -> Unit) {

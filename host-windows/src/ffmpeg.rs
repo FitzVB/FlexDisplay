@@ -100,12 +100,12 @@ pub async fn stream_with_ffmpeg(
         && (config.fit.eq_ignore_ascii_case("contain") || config.fit.is_empty());
     let vf = if use_contain {
         format!(
-            "scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
+            "scale={}:{}:flags=fast_bilinear:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
             config.out_w, config.out_h, config.out_w, config.out_h
         )
     } else {
         format!(
-            "scale={}:{}:force_original_aspect_ratio=increase,crop={}:{}:(iw-{})/2:(ih-{})/2,format=yuv420p",
+            "scale={}:{}:flags=fast_bilinear:force_original_aspect_ratio=increase,crop={}:{}:(iw-{})/2:(ih-{})/2,format=yuv420p",
             config.out_w, config.out_h, config.out_w, config.out_h, config.out_w, config.out_h
         )
     };
@@ -136,11 +136,13 @@ pub async fn stream_with_ffmpeg(
         "h264_amf" => effective_bitrate_kbps / if usb { 8 } else { 4 },
         "h264_nvenc" => effective_bitrate_kbps / 12,
         "h264_qsv" => effective_bitrate_kbps / if usb { 8 } else { 4 },
+        "libx264" => effective_bitrate_kbps / if usb { 8 } else { 4 },
         _ => effective_bitrate_kbps / 4,
     };
     let gop = match config.encoder.as_str() {
         "h264_amf" => config.fps.clamp(15, 120),
         "libx264" => config.fps.clamp(15, 60),
+        "h264_qsv" => config.fps.clamp(30, 120),
         // One IDR per second at 60 fps — avoids 150 KB keyframes every 0.5 s.
         "h264_nvenc" => config.fps.clamp(30, 120),
         _ => (config.fps / 2).clamp(15, 30),
@@ -230,6 +232,7 @@ pub async fn stream_with_ffmpeg(
     }
 
     let mut buf = vec![0u8; 4 * 1024];
+    let mut send_buf = Vec::with_capacity(4 * 1024);
     let mut sent_any = false;
     let probe_deadline =
         tokio::time::Instant::now() + tokio::time::Duration::from_millis(PROBE_TIMEOUT_MS);
@@ -285,11 +288,16 @@ pub async fn stream_with_ffmpeg(
                     }
                 }
                 sent_any = true;
+                send_buf.clear();
+                send_buf.extend_from_slice(&buf[..n]);
                 let send_result = tokio::time::timeout(
                     tokio::time::Duration::from_secs(2),
-                    ws_tx.send(Message::binary(buf[..n].to_vec())),
+                    ws_tx.send(Message::binary(std::mem::take(&mut send_buf))),
                 )
                 .await;
+                if send_buf.capacity() < 4 * 1024 {
+                    send_buf.reserve(4 * 1024);
+                }
                 match send_result {
                     Ok(Ok(())) => {
                         stream_latency.mark_send_now();

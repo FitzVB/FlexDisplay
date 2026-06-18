@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-06-17
+
+### Changed
+- **Latest-frame-wins**: Android decoder drops stale decoded frames and only renders the newest — cuts glass latency when the HW decoder runs ahead.
+- **TCP_NODELAY** on OkHttp WebSockets (input + video) for immediate small-packet send.
+- **Input move throttle** 2ms → 1ms; decoder input buffer wait 4ms → 2ms.
+- **Host**: reusable WebSocket send buffer, `fast_bilinear` scale, tighter libx264 VBV on USB, QSV GOP = 1s, NVENC `-rc-lookahead 0`/`-delay 0`, encoder probe timeout 1s.
+
+---
+
 ## [0.2.5] - 2026-06-17
 
 ### Fixed
