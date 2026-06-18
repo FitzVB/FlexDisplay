@@ -100,12 +100,12 @@ pub async fn stream_with_ffmpeg(
         && (config.fit.eq_ignore_ascii_case("contain") || config.fit.is_empty());
     let vf = if use_contain {
         format!(
-            "scale={}:{}:flags=fast_bilinear:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
+            "scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
             config.out_w, config.out_h, config.out_w, config.out_h
         )
     } else {
         format!(
-            "scale={}:{}:flags=fast_bilinear:force_original_aspect_ratio=increase,crop={}:{}:(iw-{})/2:(ih-{})/2,format=yuv420p",
+            "scale={}:{}:force_original_aspect_ratio=increase,crop={}:{}:(iw-{})/2:(ih-{})/2,format=yuv420p",
             config.out_w, config.out_h, config.out_w, config.out_h, config.out_w, config.out_h
         )
     };
@@ -123,7 +123,7 @@ pub async fn stream_with_ffmpeg(
     let effective_bitrate_kbps = if config.encoder == "libx264" {
         config.bitrate_kbps.min(12000)
     } else if config.encoder == "h264_nvenc" {
-        config.bitrate_kbps.min(8000)
+        config.bitrate_kbps.min(10000)
     } else if config.encoder == "h264_amf" {
         config.bitrate_kbps.clamp(5_000, 18_000)
     } else {
@@ -131,13 +131,19 @@ pub async fn stream_with_ffmpeg(
     };
 
     let usb = config.transport == TransportKind::Usb;
+    // Wider VBV absorbs I-frame spikes on scene cuts; /12 caused blocky flashes on video.
     let bufsize = match config.encoder.as_str() {
-        // Tighter VBV on USB — less encoder buffering; WiFi keeps headroom for jitter.
-        "h264_amf" => effective_bitrate_kbps / if usb { 8 } else { 4 },
-        "h264_nvenc" => effective_bitrate_kbps / 12,
-        "h264_qsv" => effective_bitrate_kbps / if usb { 8 } else { 4 },
-        "libx264" => effective_bitrate_kbps / if usb { 8 } else { 4 },
+        "h264_nvenc" => effective_bitrate_kbps / if usb { 6 } else { 4 },
+        "h264_amf" => effective_bitrate_kbps / if usb { 6 } else { 4 },
+        "h264_qsv" => effective_bitrate_kbps / if usb { 6 } else { 4 },
+        "libx264" => effective_bitrate_kbps / 4,
         _ => effective_bitrate_kbps / 4,
+    };
+    let maxrate_kbps = match config.encoder.as_str() {
+        "h264_nvenc" | "h264_amf" | "h264_qsv" => {
+            ((effective_bitrate_kbps as f64) * 1.25).round() as u32
+        }
+        _ => effective_bitrate_kbps,
     };
     let gop = match config.encoder.as_str() {
         "h264_amf" => config.fps.clamp(15, 120),
@@ -153,7 +159,7 @@ pub async fn stream_with_ffmpeg(
         "-b:v".into(),
         format!("{}k", effective_bitrate_kbps),
         "-maxrate".into(),
-        format!("{}k", effective_bitrate_kbps),
+        format!("{}k", maxrate_kbps),
         "-bufsize".into(),
         format!("{}k", bufsize),
         "-bsf:v".into(),

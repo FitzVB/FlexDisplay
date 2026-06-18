@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-06-17
+
+### Fixed
+- **Video artifacts on scene cuts**: re-enabled encoder scenecut (NVENC/libx264), wider VBV buffer, 25% maxrate burst for HW encoders, NVENC USB bitrate up to 10 Mbps.
+- **Decoder macroblocks**: AU queue depth 3 with IDR-priority flush; only collapse decoder backlog when >2 frames queued (smoother video playback).
+
+### Changed
+- AMF quality back to `balanced` + `vbaq`; scale filter uses default (not `fast_bilinear`).
+
+---
+
 ## [0.2.7] - 2026-06-17
 
 ### Fixed

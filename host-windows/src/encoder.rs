@@ -382,9 +382,9 @@ pub fn encoder_extra_args(encoder: &str) -> Vec<String> {
             "-forced-idr".into(),
             "0".into(),
             "-no-scenecut".into(),
-            "1".into(),
+            "0".into(),
             "-strict_gop".into(),
-            "1".into(),
+            "0".into(),
         ],
         "h264_qsv" => vec![
             "-preset".into(),
@@ -400,7 +400,7 @@ pub fn encoder_extra_args(encoder: &str) -> Vec<String> {
             "-usage".into(),
             "lowlatency".into(),
             "-quality".into(),
-            "speed".into(),
+            "balanced".into(),
             "-latency".into(),
             "true".into(),
             "-rc".into(),
@@ -416,7 +416,7 @@ pub fn encoder_extra_args(encoder: &str) -> Vec<String> {
             "-max_b_frames".into(),
             "0".into(),
             "-vbaq".into(),
-            "false".into(),
+            "true".into(),
         ],
         "libx264" => vec![
             "-preset".into(),
@@ -429,7 +429,7 @@ pub fn encoder_extra_args(encoder: &str) -> Vec<String> {
             "5.1".into(),
             "-x264-params".into(),
             format!(
-                "bframes=0:scenecut=0:ref=1:cabac=0:rc-lookahead=0:sync-lookahead=0:repeat-headers=1:aud=1:sliced-threads={sliced_threads}"
+                "bframes=0:scenecut=40:ref=1:cabac=0:rc-lookahead=0:sync-lookahead=0:repeat-headers=1:aud=1:sliced-threads={sliced_threads}"
             ),
         ],
         _ => vec!["-bf".into(), "0".into()],

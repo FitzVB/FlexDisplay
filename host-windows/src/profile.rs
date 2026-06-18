@@ -25,7 +25,7 @@ impl TransportKind {
 
     pub fn default_bitrate_kbps(self) -> u32 {
         match self {
-            Self::Usb => 8_000,
+            Self::Usb => 10_000,
             Self::Wifi | Self::Unknown => 5_000,
         }
     }
@@ -206,7 +206,7 @@ pub fn apply_encoder_profile_caps(
                 TransportKind::Usb => fps.min(60),
                 TransportKind::Wifi | TransportKind::Unknown => fps.min(30),
             };
-            bitrate = bitrate.clamp(4_000, 8_000);
+            bitrate = bitrate.clamp(4_000, 10_000);
         }
         "h264_qsv" => {
             (w, h) = match transport {

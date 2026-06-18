@@ -59,7 +59,7 @@ class MainActivity : AppCompatActivity() {
         private const val WIFI_MAX_STREAM_HEIGHT = 720.0
         private const val STREAM_FPS_USB = 60
         private const val STREAM_FPS_WIFI = 30
-        private const val STREAM_BITRATE_USB_KBPS = 8000
+        private const val STREAM_BITRATE_USB_KBPS = 10000
         private const val STREAM_BITRATE_WIFI_KBPS = 5000
         // Decoder tolerance for adaptive profiles up to 1920×1200.
         private const val DECODER_MAX_WIDTH = 1920
@@ -1147,10 +1147,9 @@ private class H264Decoder(
     // Queue access units (full frame payloads) instead of individual NAL units.
     // Sending single slices separately can produce green/pink macroblock artifacts
     // on some Android hardware decoders.
-    // Queue depth 1: a single slot between the parser thread and the submit thread.
-    // When the slot is full, the current frame replaces the queued one (drop-oldest).
-    // This removes up to one full frame (~16ms) of buffer latency from the pipeline.
-    private val auQueue = java.util.concurrent.ArrayBlockingQueue<ByteArray>(1)
+    // Queue depth 3: absorbs bursts on scene cuts without dropping reference P-frames
+    // (depth 1 drop-oldest caused green/pink macroblocks until the next IDR).
+    private val auQueue = java.util.concurrent.ArrayBlockingQueue<ByteArray>(3)
     private val submitThread = Thread {
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
         while (!Thread.currentThread().isInterrupted) {
@@ -1280,19 +1279,49 @@ private class H264Decoder(
         if (!codecStarted) {
             return
         }
+        enqueueAccessUnit(accessUnit)
+    }
+
+    private fun enqueueAccessUnit(accessUnit: ByteArray) {
+        if (containsIdrNal(accessUnit)) {
+            auQueue.clear()
+            auQueue.offer(accessUnit)
+            return
+        }
         if (!auQueue.offer(accessUnit)) {
             auQueue.poll()
             auQueue.offer(accessUnit)
         }
     }
 
+    private fun containsIdrNal(accessUnit: ByteArray): Boolean {
+        var i = 0
+        while (i + 4 < accessUnit.size) {
+            if (accessUnit[i] == 0.toByte() && accessUnit[i + 1] == 0.toByte()) {
+                val startCodeLen = when {
+                    accessUnit[i + 2] == 1.toByte() -> 3
+                    i + 3 < accessUnit.size &&
+                        accessUnit[i + 2] == 0.toByte() &&
+                        accessUnit[i + 3] == 1.toByte() -> 4
+                    else -> 0
+                }
+                if (startCodeLen > 0 && i + startCodeLen < accessUnit.size) {
+                    val nalType = accessUnit[i + startCodeLen].toInt() and 0x1F
+                    if (nalType == 5) return true
+                }
+            }
+            i++
+        }
+        return false
+    }
+
     private fun submitAccessUnit(accessUnit: ByteArray) {
         // Block up to 4ms to get an input buffer slot — runs on the dedicated submit
         // thread, not the WebSocket thread, so blocking here is safe and prevents
         // the P-frame drops that caused systematic sub-60fps delivery.
-        val index = codec.dequeueInputBuffer(2000)
+        val index = codec.dequeueInputBuffer(5000)
         if (index < 0) {
-            android.util.Log.w("H264Decoder", "AU dropped — no input buffer in 2ms")
+            android.util.Log.w("H264Decoder", "AU dropped — no input buffer in 5ms")
             return
         }
         val input = codec.getInputBuffer(index) ?: run {
@@ -1370,12 +1399,11 @@ private class H264Decoder(
 
     private fun drainOutput() {
         val info = MediaCodec.BufferInfo()
-        // Block up to 2ms for the next decoded frame, then drain any backlog
-        // non-blocking. Only the newest frame is rendered — older ones are dropped
-        // to cut display latency when the decoder runs ahead of the network.
+        // Drain available frames; only collapse to latest when backlog > 2 (decoder behind).
+        // Rendering every frame when load is normal keeps video smooth; dropping only
+        // under backlog cuts latency without stuttering desktop use.
         var timeout = 2000L
-        var pendingIndex = -1
-        var pendingLatencyMs = 0L
+        val pending = ArrayList<Pair<Int, Long>>(4)
 
         while (true) {
             when (val outIndex = codec.dequeueOutputBuffer(info, timeout)) {
@@ -1403,41 +1431,65 @@ private class H264Decoder(
                 @Suppress("DEPRECATION")
                 MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> { /* no-op in API 21+ */ }
                 else -> if (outIndex >= 0) {
-                    if (pendingIndex >= 0) {
-                        codec.releaseOutputBuffer(pendingIndex, false)
-                    }
-                    pendingIndex = outIndex
-                    pendingLatencyMs = (System.nanoTime() - info.presentationTimeUs * 1000L) / 1_000_000L
+                    val latencyMs = (System.nanoTime() - info.presentationTimeUs * 1000L) / 1_000_000L
+                    pending.add(outIndex to latencyMs)
                 }
             }
             timeout = 0L
         }
 
-        if (pendingIndex < 0) return
+        if (pending.isEmpty()) return
+
+        val toRender = if (pending.size > 2) {
+            for (i in 0 until pending.size - 1) {
+                codec.releaseOutputBuffer(pending[i].first, false)
+            }
+            pending.last()
+        } else {
+            var lastLatency = 0L
+            pending.forEach { (index, latencyMs) ->
+                framesRendered++
+                hudFrameCount++
+                lastLatency = latencyMs
+                codec.releaseOutputBuffer(index, true)
+            }
+            updateHudIfNeeded(lastLatency, pending.size)
+            return
+        }
+
+        val pendingIndex = toRender.first
+        val pendingLatencyMs = toRender.second
 
         framesRendered++
         hudFrameCount++
         if (framesRendered <= 5 || framesRendered % 300 == 0) {
             android.util.Log.i("H264Decoder",
-                "Frame #$framesRendered  decode_latency=${pendingLatencyMs}ms")
+                "Frame #$framesRendered  decode_latency=${pendingLatencyMs}ms backlog=${pending.size}")
         }
-        val nowMs = System.currentTimeMillis()
-        if (nowMs - hudLastMs >= 1000) {
-            val windowMs = (nowMs - hudLastMs).coerceAtLeast(1)
-            val bytesDelta = (totalBytesReceived - bytesAtLastHud).coerceAtLeast(0L)
-            val instantRxKbps = (bytesDelta * 8L * 1000L) / windowMs / 1000L
-            bytesAtLastHud = totalBytesReceived
-
-            val instantFps = hudFrameCount * 1000f / windowMs
-            val alpha = 0.25f
-            emaFps = if (emaFps < 1f) instantFps else alpha * instantFps + (1f - alpha) * emaFps
-            emaLatencyMs = if (emaLatencyMs < 1f) pendingLatencyMs.toFloat()
-                           else alpha * pendingLatencyMs + (1f - alpha) * emaLatencyMs
-            onHudUpdate(emaFps, emaLatencyMs.toLong(), bufferWidth, bufferHeight, pictureWidth, pictureHeight, cropLeft, cropTop, instantRxKbps)
-            hudFrameCount = 0
-            hudLastMs = nowMs
-        }
+        updateHudIfNeeded(pendingLatencyMs, pending.size)
         codec.releaseOutputBuffer(pendingIndex, true)
+    }
+
+    private fun updateHudIfNeeded(latencyMs: Long, backlog: Int) {
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - hudLastMs < 1000) return
+
+        val windowMs = (nowMs - hudLastMs).coerceAtLeast(1)
+        val bytesDelta = (totalBytesReceived - bytesAtLastHud).coerceAtLeast(0L)
+        val instantRxKbps = (bytesDelta * 8L * 1000L) / windowMs / 1000L
+        bytesAtLastHud = totalBytesReceived
+
+        val instantFps = hudFrameCount * 1000f / windowMs
+        val alpha = 0.25f
+        emaFps = if (emaFps < 1f) instantFps else alpha * instantFps + (1f - alpha) * emaFps
+        emaLatencyMs = if (emaLatencyMs < 1f) latencyMs.toFloat()
+                       else alpha * latencyMs + (1f - alpha) * emaLatencyMs
+        onHudUpdate(emaFps, emaLatencyMs.toLong(), bufferWidth, bufferHeight, pictureWidth, pictureHeight, cropLeft, cropTop, instantRxKbps)
+        hudFrameCount = 0
+        hudLastMs = nowMs
+        if (backlog > 2) {
+            android.util.Log.d("H264Decoder", "Collapsed decoder backlog ($backlog frames)")
+        }
     }
 
     fun release() {
