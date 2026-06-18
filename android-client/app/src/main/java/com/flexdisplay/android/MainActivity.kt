@@ -46,8 +46,8 @@ import org.json.JSONObject
 import java.io.IOException
 import java.net.InetAddress
 import java.net.Socket
-import java.net.SocketFactory
 import java.util.concurrent.TimeUnit
+import javax.net.SocketFactory
 
 class MainActivity : AppCompatActivity() {
 
