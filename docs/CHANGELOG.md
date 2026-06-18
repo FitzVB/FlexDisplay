@@ -5,10 +5,14 @@ All notable changes to this project are documented in this file.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.6] - 2026-06-17
+## [0.2.7] - 2026-06-17
 
 ### Fixed
 - **STOP.bat**: now stops `FlexDisplay.exe` (not only `host-windows`), child FFmpeg processes, ADB logcat sidecars, and runs `adb kill-server`.
+
+---
+
+## [0.2.6] - 2026-06-17
 
 ### Changed
 - **Latest-frame-wins**: Android decoder drops stale decoded frames and only renders the newest — cuts glass latency when the HW decoder runs ahead.
